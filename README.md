@@ -32,13 +32,13 @@ Each worktree gets a numbered slot. The slot determines everything:
 
 ### 1. Install
 
+**Global** (available in all repos):
+
 ```bash
-# npm / pnpm / yarn — pick one
-pnpm add -D wt
-npm install --save-dev wt
+npm install -g "github:Tokenbooks/wt"
 ```
 
-Or install from GitHub:
+**Per-project** (recommended for teams — version-locked in package.json):
 
 ```bash
 pnpm add -D "github:Tokenbooks/wt"
@@ -277,10 +277,14 @@ git_dir=$(git rev-parse --git-dir 2>/dev/null)
 # Resolve main worktree path
 main_worktree=$(cd "$git_common/.." && pwd -P)
 
-# Use the wt binary from the main worktree
+# Find wt: local install first, then global
 wt_bin="$main_worktree/node_modules/.bin/wt"
 if [ ! -f "$wt_bin" ]; then
-  echo "Warning: wt CLI not found. Run 'npm install' in main worktree."
+  wt_bin=$(command -v wt 2>/dev/null || true)
+fi
+
+if [ -z "$wt_bin" ]; then
+  echo "Warning: wt CLI not found. Install globally (npm i -g wt) or locally (npm i -D wt)."
   exit 0
 fi
 
@@ -291,7 +295,7 @@ echo "Setting up worktree environment..."
 }
 ```
 
-The hook uses the main worktree's installed `wt` binary, so secondary worktrees don't need their own `node_modules` to trigger setup.
+The hook checks for a local install first (`node_modules/.bin/wt`), then falls back to a global `wt` on PATH.
 
 ## Setup Guide for LLM Agents
 
