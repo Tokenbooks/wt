@@ -1,0 +1,34 @@
+{
+  "name": "wt",
+  "version": "0.1.0",
+  "description": "Git worktree environment isolation CLI",
+  "main": "dist/cli.js",
+  "bin": {
+    "wt": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/link-cli.js",
+    "dev": "tsc --watch",
+    "test": "jest",
+    "lint": "eslint 'src/**/*.ts' '__tests__/**/*.ts'"
+  },
+  "dependencies": {
+    "commander": "^14.0.0",
+    "pg": "^8.16.0",
+    "zod": "^4.2.1"
+  },
+  "devDependencies": {
+    "@jest/globals": "^30.2.0",
+    "@types/node": "^24.10.0",
+    "@types/pg": "^8.11.0",
+    "@typescript-eslint/eslint-plugin": "^8.53.0",
+    "@typescript-eslint/parser": "^8.53.0",
+    "eslint": "^9.39.0",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.1",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=20.19.0 || >=22.3.0"
+  }
+}
