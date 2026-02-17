@@ -73,7 +73,7 @@ Validation rules:
 
 ```bash
 # Detect package manager and install
-pnpm add -D "github:Tokenbooks/wt"   # or npm install --save-dev
+pnpm add -D @tokenbooks/wt
 ```
 
 **Step 5: Update .gitignore**

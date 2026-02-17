@@ -1,18 +1,30 @@
 {
-  "name": "wt",
+  "name": "@tokenbooks/wt",
   "version": "0.1.0",
   "description": "Git worktree environment isolation CLI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tokenbooks/wt.git"
+  },
   "main": "dist/cli.js",
   "bin": {
     "wt": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "skills",
+    "README.md"
+  ],
   "scripts": {
     "prepare": "tsc && node scripts/link-cli.js",
     "build": "tsc && node scripts/link-cli.js",
     "dev": "tsc --watch",
     "test": "jest",
-    "lint": "eslint 'src/**/*.ts' '__tests__/**/*.ts'"
+    "lint": "eslint 'src/**/*.ts' '__tests__/**/*.ts'",
+    "prepack": "tsc"
   },
+  "packageManager": "pnpm@10.12.1",
   "dependencies": {
     "commander": "^14.0.0",
     "pg": "^8.16.0",

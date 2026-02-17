@@ -35,13 +35,13 @@ Each worktree gets a numbered slot. The slot determines everything:
 **Global** (available in all repos):
 
 ```bash
-npm install -g "github:Tokenbooks/wt"
+pnpm add -g @tokenbooks/wt
 ```
 
 **Per-project** (recommended for teams — version-locked in package.json):
 
 ```bash
-pnpm add -D "github:Tokenbooks/wt"
+pnpm add -D @tokenbooks/wt
 ```
 
 ### 2. Create `wt.config.json`
@@ -107,6 +107,17 @@ wt doctor
 # Clean up
 wt remove feat-my-feature
 ```
+
+### 5. Claude Code skill (optional)
+
+The package ships with a `/wt` skill for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). To enable it, symlink from your project:
+
+```bash
+mkdir -p .claude/skills
+ln -s ../../node_modules/@tokenbooks/wt/skills/wt/SKILL.md .claude/skills/wt.md
+```
+
+Then use `/wt init`, `/wt new feat/foo`, `/wt doctor`, etc. inside Claude Code.
 
 ## Commands
 
@@ -284,7 +295,7 @@ if [ ! -f "$wt_bin" ]; then
 fi
 
 if [ -z "$wt_bin" ]; then
-  echo "Warning: wt CLI not found. Install globally (npm i -g wt) or locally (npm i -D wt)."
+  echo "Warning: wt CLI not found. Install globally (pnpm add -g @tokenbooks/wt) or locally (pnpm add -D @tokenbooks/wt)."
   exit 0
 fi
 
@@ -343,7 +354,7 @@ Validate that:
 
 ```bash
 # Install wt
-pnpm add -D "github:Tokenbooks/wt"
+pnpm add -D @tokenbooks/wt
 
 # Add to .gitignore
 echo ".worktree-registry.json" >> .gitignore
