@@ -6,6 +6,7 @@ import { setupCommand } from './commands/setup';
 import { removeCommand } from './commands/remove';
 import { listCommand } from './commands/list';
 import { doctorCommand } from './commands/doctor';
+import { openCommand } from './commands/open';
 import { getMainWorktreePath } from './core/git';
 
 const program = new Command();
@@ -38,6 +39,19 @@ program
   .option('--json', 'Output as JSON', false)
   .action(async (targetPath: string | undefined, opts) => {
     await setupCommand(targetPath, {
+      json: opts.json,
+      install: opts.install,
+    });
+  });
+
+program
+  .command('open')
+  .description('Open a worktree by slot or branch (creates if not found)')
+  .argument('<slot-or-branch>', 'Slot number or branch name')
+  .option('--no-install', 'Skip post-setup commands if creating')
+  .option('--json', 'Output as JSON', false)
+  .action(async (slotOrBranch: string, opts) => {
+    await openCommand(slotOrBranch, {
       json: opts.json,
       install: opts.install,
     });

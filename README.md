@@ -98,6 +98,10 @@ echo ".worktree-registry.json" >> .gitignore
 # Create a worktree with full isolation
 wt new feat/my-feature
 
+# Jump into a worktree by slot or branch
+cd $(wt open 1)
+cd $(wt open feat/my-feature)
+
 # List all worktree allocations
 wt list
 
@@ -130,6 +134,24 @@ Creates a new git worktree and sets up its isolated environment:
 3. Creates a new Postgres database from the main DB as template
 4. Copies all configured `.env` files, patching each with slot-specific values
 5. Runs `postSetup` commands (unless `--no-install`)
+
+### `wt open <slot-or-branch> [--no-install] [--json]`
+
+Opens an existing worktree or creates one on the fly. Prints the worktree path to stdout for easy shell integration:
+
+```bash
+cd $(wt open 1)                    # by slot number
+cd $(wt open feat/my-feature)      # by branch name (creates if not found)
+```
+
+- **Slot number**: Looks up the allocation and prints its path. Exits 1 if the slot is empty.
+- **Branch name**: Scans allocations for a matching branch. If not found, creates a new worktree (like `wt new`).
+
+Shell helper tip:
+
+```bash
+wto() { cd "$(wt open "$@")"; }
+```
 
 ### `wt setup [path] [--no-install] [--json]`
 

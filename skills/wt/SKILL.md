@@ -1,7 +1,7 @@
 ---
 name: wt
 description: Manage git worktree isolation — create, list, remove worktrees with isolated databases, Redis, and ports
-argument-hint: "[new|list|remove|doctor|setup|init] [args...]"
+argument-hint: "[new|open|list|remove|doctor|setup|init] [args...]"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 ---
 
@@ -136,6 +136,19 @@ Present the results to the user.
 
 ---
 
+### `open $1` — Open (or create) a worktree
+
+Run:
+```bash
+wt open $1
+```
+
+Accepts a slot number (`1`) or branch name (`feat/auth`). If a branch isn't found in the registry, it creates a new worktree automatically.
+
+Tip: use `cd $(wt open $1)` to jump into the worktree directory.
+
+---
+
 ### `new $1` — Create a new worktree
 
 Run:
@@ -204,6 +217,7 @@ Show a brief help:
 Available commands:
   /wt init              — Set up wt in a new repository (discovers env files, generates config)
   /wt new <branch>      — Create a worktree with isolated DB, Redis, and ports
+  /wt open <slot|branch> — Open a worktree by slot or branch (creates if not found)
   /wt list              — List all worktree allocations
   /wt remove <target>   — Remove a worktree and clean up resources
   /wt doctor            — Diagnose and fix environment issues
