@@ -8,13 +8,14 @@ import { listCommand } from './commands/list';
 import { doctorCommand } from './commands/doctor';
 import { openCommand } from './commands/open';
 import { getMainWorktreePath } from './core/git';
+import { version } from '../package.json';
 
 const program = new Command();
 
 program
   .name('wt')
   .description('Git worktree environment isolation CLI')
-  .version('0.1.0');
+  .version(version);
 
 program
   .command('new')
