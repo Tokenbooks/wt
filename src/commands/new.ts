@@ -1,5 +1,4 @@
 import * as path from 'node:path';
-import { configSchema } from '../schemas/config.schema';
 import { readRegistry, writeRegistry, addAllocation } from '../core/registry';
 import { calculatePorts, calculateDbName, findAvailableSlot } from '../core/slot-allocator';
 import { copyAndPatchAllEnvFiles } from '../core/env-patcher';

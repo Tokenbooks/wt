@@ -56,7 +56,9 @@ export function addAllocation(
 
 /** Remove an allocation from the registry, returning a new registry object */
 export function removeAllocation(registry: Registry, slot: number): Registry {
-  const { [String(slot)]: _, ...rest } = registry.allocations;
+  const rest = Object.fromEntries(
+    Object.entries(registry.allocations).filter(([key]) => key !== String(slot)),
+  );
   return { ...registry, allocations: rest };
 }
 
