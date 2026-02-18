@@ -22,7 +22,11 @@
     "dev": "tsc --watch",
     "test": "jest",
     "lint": "eslint 'src/**/*.ts' '__tests__/**/*.ts'",
-    "prepack": "tsc"
+    "prepack": "tsc",
+    "release": "node scripts/release.js",
+    "release:patch": "node scripts/release.js patch",
+    "release:minor": "node scripts/release.js minor",
+    "release:major": "node scripts/release.js major"
   },
   "packageManager": "pnpm@10.12.1",
   "dependencies": {
