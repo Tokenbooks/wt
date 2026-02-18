@@ -3,7 +3,7 @@ const path = require('node:path');
 const { execSync } = require('node:child_process');
 
 const PKG_PATH = path.join(__dirname, '..', 'package.json');
-const REPO_URL = 'https://github.com/tokenbooks/wt';
+const REPO_URL = 'https://github.com/Tokenbooks/wt';
 
 // --- helpers ---
 
