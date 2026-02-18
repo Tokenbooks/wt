@@ -8,7 +8,8 @@ const REPO_URL = 'https://github.com/tokenbooks/wt';
 // --- helpers ---
 
 function run(cmd, opts = {}) {
-  return execSync(cmd, { encoding: 'utf8', cwd: path.join(__dirname, '..'), ...opts }).trim();
+  const result = execSync(cmd, { encoding: 'utf8', cwd: path.join(__dirname, '..'), ...opts });
+  return result == null ? '' : result.trim();
 }
 
 function die(msg) {
