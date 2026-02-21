@@ -8,7 +8,8 @@ import { listCommand } from './commands/list';
 import { doctorCommand } from './commands/doctor';
 import { openCommand } from './commands/open';
 import { getMainWorktreePath } from './core/git';
-import { version } from '../package.json';
+import { name, version } from '../package.json';
+import { getUpdateNotice, refreshUpdateCache, isCacheFresh } from './core/update-check';
 
 const program = new Command();
 
@@ -90,3 +91,8 @@ program
   });
 
 program.parse();
+
+process.stderr.write(getUpdateNotice(version) + '\n');
+if (!isCacheFresh()) {
+  refreshUpdateCache(name);
+}
