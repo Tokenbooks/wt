@@ -82,8 +82,9 @@ export function patchEnvContent(
   context: PatchContext,
 ): string {
   const patchMap = new Map(patches.map((p) => [p.var, p]));
+  const found = new Set<string>();
 
-  return content
+  const lines = content
     .split('\n')
     .map((line) => {
       const match = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)/);
@@ -93,12 +94,26 @@ export function patchEnvContent(
       const patch = patchMap.get(varName!);
       if (!patch) return line;
 
+      found.add(varName!);
       const unquoted = rawValue!.replace(/^["']|["']$/g, '');
       const patched = applyPatch(unquoted, patch, context);
       const quote = rawValue!.startsWith('"') ? '"' : rawValue!.startsWith("'") ? "'" : '';
       return `${varName}=${quote}${patched}${quote}`;
-    })
-    .join('\n');
+    });
+
+  // Append vars declared in patches but missing from the source file.
+  // Only "port" patches can be computed without a source value.
+  for (const patch of patches) {
+    if (found.has(patch.var)) continue;
+    if (patch.type === 'port') {
+      const serviceName = patch.service;
+      if (serviceName && serviceName in context.ports) {
+        lines.push(`${patch.var}=${context.ports[serviceName]}`);
+      }
+    }
+  }
+
+  return lines.join('\n');
 }
 
 /**

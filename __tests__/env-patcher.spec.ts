@@ -94,6 +94,28 @@ describe('env-patcher', () => {
     });
   });
 
+  describe('missing port var', () => {
+    const patches: PatchConfig[] = [
+      { var: 'PORT', type: 'port', service: 'server' },
+    ];
+
+    it('appends port var when missing from source', () => {
+      const content = 'DATABASE_URL=postgresql://localhost/mydb\nSOME_VAR=hello';
+
+      const result = patchEnvContent(content, patches, context);
+
+      expect(result).toBe(
+        'DATABASE_URL=postgresql://localhost/mydb\nSOME_VAR=hello\nPORT=3301',
+      );
+    });
+
+    it('does not duplicate when port var already exists', () => {
+      const result = patchEnvContent('PORT=3001', patches, context);
+
+      expect(result).toBe('PORT=3301');
+    });
+  });
+
   describe('multi-line env content', () => {
     it('patches only matching vars and preserves other lines', () => {
       // Arrange
