@@ -67,7 +67,11 @@ export async function createNewWorktree(
 
   // Create worktree
   const basePath = path.join(mainRoot, config.baseWorktreePath);
-  const worktreePath = createWorktree(basePath, branchName);
+  const worktreePath = createWorktree(
+    basePath,
+    branchName,
+    (command) => log(`Running: ${command}`),
+  );
   const actualBranch = getBranchName(worktreePath);
 
   // Compute isolation params
@@ -79,7 +83,12 @@ export async function createNewWorktree(
   const dbAlreadyExists = await databaseExists(databaseUrl, dbName);
   if (!dbAlreadyExists) {
     log(`Creating database '${dbName}'...`);
-    await createDatabase(databaseUrl, config.baseDatabaseName, dbName);
+    await createDatabase(
+      databaseUrl,
+      config.baseDatabaseName,
+      dbName,
+      (statement) => log(`Running SQL: ${statement}`),
+    );
   } else {
     log(`Database '${dbName}' already exists, reusing.`);
   }

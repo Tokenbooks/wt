@@ -171,14 +171,18 @@ wt list
 
 ---
 
-### `remove $1` — Remove a worktree
+### `remove [targets...]|--all` — Remove one or more worktrees
 
 Run:
 ```bash
-wt remove $1
+wt remove $@
 ```
 
-Accepts either a path (`.worktrees/feat-auth`) or a slot number (`3`).
+Accepts paths or slots, including batch slot formats:
+- `wt remove 1 2`
+- `wt remove 1,2`
+- `wt remove "1, 2"`
+- `wt remove --all`
 
 If the user wants to keep the database, use `--keep-db`.
 
@@ -219,7 +223,7 @@ Available commands:
   /wt new <branch>      — Create a worktree with isolated DB, Redis, and ports
   /wt open <slot|branch> — Open a worktree by slot or branch (creates if not found)
   /wt list              — List all worktree allocations
-  /wt remove <target>   — Remove a worktree and clean up resources
+  /wt remove <targets...>|--all — Remove one or more worktrees and clean up resources
   /wt doctor            — Diagnose and fix environment issues
   /wt setup [path]      — Set up an existing worktree
 ```

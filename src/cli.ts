@@ -61,14 +61,29 @@ program
 
 program
   .command('remove')
-  .description('Remove a worktree and clean up its resources')
-  .argument('<path-or-slot>', 'Worktree path or slot number')
+  .description('Remove worktree(s) by target list, CSV slots, or --all')
+  .argument('[targets...]', 'Worktree path(s) or slot number(s); supports comma-separated values')
+  .option('--all', 'Remove all registered worktrees', false)
   .option('--keep-db', 'Keep the database (do not drop)', false)
   .option('--json', 'Output as JSON', false)
-  .action(async (pathOrSlot: string, opts) => {
-    await removeCommand(pathOrSlot, {
+  .addHelpText(
+    'after',
+    [
+      '',
+      'Examples:',
+      '  wt remove 1',
+      '  wt remove 1,2',
+      '  wt remove "1, 2"',
+      '  wt remove .worktrees/feat-auth',
+      '  wt remove --all',
+      '',
+    ].join('\n'),
+  )
+  .action(async (targets: string[] | undefined, opts) => {
+    await removeCommand(targets ?? [], {
       json: opts.json,
       keepDb: opts.keepDb,
+      all: opts.all,
     });
   });
 

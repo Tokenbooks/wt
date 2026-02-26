@@ -163,7 +163,7 @@ Sets up an existing worktree that was created manually or by another tool. Usefu
 
 If the worktree already has a slot allocation, it reuses it.
 
-### `wt remove <path-or-slot> [--keep-db] [--json]`
+### `wt remove <targets...> [--all] [--keep-db] [--json]`
 
 Removes a worktree and cleans up its resources:
 
@@ -171,7 +171,12 @@ Removes a worktree and cleans up its resources:
 2. Runs `git worktree remove`
 3. Removes the allocation from the registry
 
-Accepts either a path (`.worktrees/feat-my-feature`) or a slot number (`3`).
+Accepts either paths (`.worktrees/feat-my-feature`) or slot numbers (`3`), including batch formats:
+
+- `wt remove 1 2`
+- `wt remove 1,2`
+- `wt remove "1, 2"`
+- `wt remove --all`
 
 ### `wt list [--json]`
 

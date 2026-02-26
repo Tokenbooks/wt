@@ -1,5 +1,7 @@
 import { Client } from 'pg';
 
+type SqlLogger = (statement: string) => void;
+
 /**
  * Parse a postgres connection URL to extract the host, port, user, password.
  * Used to connect to the 'postgres' maintenance DB for admin operations.
@@ -29,6 +31,20 @@ async function withAdminClient<T>(
   }
 }
 
+function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
+function formatQueryLog(query: string, params: readonly unknown[] = []): string {
+  if (params.length === 0) {
+    return query;
+  }
+  const bindings = params
+    .map((value, index) => `$${index + 1}=${JSON.stringify(value)}`)
+    .join(', ');
+  return `${query} -- ${bindings}`;
+}
+
 /**
  * Create a new database by cloning the template database.
  * Uses CREATE DATABASE ... TEMPLATE for fast, consistent copies.
@@ -37,16 +53,18 @@ export async function createDatabase(
   databaseUrl: string,
   templateName: string,
   targetName: string,
+  logSql?: SqlLogger,
 ): Promise<void> {
   await withAdminClient(databaseUrl, async (client) => {
     // Terminate connections to the template DB so TEMPLATE works
-    await client.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
-      [templateName],
-    );
-    await client.query(
-      `CREATE DATABASE "${targetName}" TEMPLATE "${templateName}"`,
-    );
+    const terminateSql =
+      'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()';
+    logSql?.(formatQueryLog(terminateSql, [templateName]));
+    await client.query(terminateSql, [templateName]);
+
+    const createSql = `CREATE DATABASE ${quoteIdentifier(targetName)} TEMPLATE ${quoteIdentifier(templateName)}`;
+    logSql?.(formatQueryLog(createSql));
+    await client.query(createSql);
   });
 }
 
@@ -55,17 +73,21 @@ export async function dropDatabase(
   databaseUrl: string,
   dbName: string,
   templateName: string,
+  logSql?: SqlLogger,
 ): Promise<void> {
   if (dbName === templateName) {
     throw new Error(`Refusing to drop template database: ${templateName}`);
   }
   await withAdminClient(databaseUrl, async (client) => {
     // Terminate active connections first
-    await client.query(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
-      [dbName],
-    );
-    await client.query(`DROP DATABASE IF EXISTS "${dbName}"`);
+    const terminateSql =
+      'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()';
+    logSql?.(formatQueryLog(terminateSql, [dbName]));
+    await client.query(terminateSql, [dbName]);
+
+    const dropSql = `DROP DATABASE IF EXISTS ${quoteIdentifier(dbName)}`;
+    logSql?.(formatQueryLog(dropSql));
+    await client.query(dropSql);
   });
 }
 

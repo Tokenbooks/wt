@@ -1,6 +1,8 @@
 import { execSync } from 'node:child_process';
 import * as path from 'node:path';
 
+type CommandLogger = (command: string) => void;
+
 /**
  * Get the main (bare) worktree path from git.
  * Parses `git worktree list --porcelain` to find the first entry.
@@ -29,7 +31,11 @@ export function isMainWorktree(targetPath: string): boolean {
  * Create a new git worktree at the given base path for the specified branch.
  * If the branch already exists, checks it out; otherwise creates it with -b.
  */
-export function createWorktree(basePath: string, branchName: string): string {
+export function createWorktree(
+  basePath: string,
+  branchName: string,
+  logCommand?: CommandLogger,
+): string {
   const slug = branchName.replace(/\//g, '-');
   const worktreePath = path.resolve(basePath, slug);
 
@@ -38,13 +44,20 @@ export function createWorktree(basePath: string, branchName: string): string {
     ? `"${worktreePath}" "${branchName}"`
     : `"${worktreePath}" -b "${branchName}"`;
 
-  execSync(`git worktree add ${args}`, { stdio: 'pipe' });
+  const command = `git worktree add ${args}`;
+  logCommand?.(command);
+  execSync(command, { stdio: 'pipe' });
   return worktreePath;
 }
 
 /** Remove a git worktree by path */
-export function removeWorktree(worktreePath: string): void {
-  execSync(`git worktree remove "${worktreePath}" --force`, { stdio: 'pipe' });
+export function removeWorktree(
+  worktreePath: string,
+  logCommand?: CommandLogger,
+): void {
+  const command = `git worktree remove "${worktreePath}" --force`;
+  logCommand?.(command);
+  execSync(command, { stdio: 'pipe' });
 }
 
 /** Get the current branch name for a worktree path */
