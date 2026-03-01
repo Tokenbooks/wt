@@ -68,6 +68,35 @@ export function getBranchName(worktreePath: string): string {
   }).trim();
 }
 
+/** Get uncommitted changes in a worktree (staged, unstaged, untracked) */
+export function getUncommittedChanges(worktreePath: string): string[] {
+  const output = execSync('git status --porcelain', {
+    cwd: worktreePath,
+    encoding: 'utf-8',
+  }).trim();
+  return output.length > 0 ? output.split('\n') : [];
+}
+
+/** Get commits not pushed to upstream tracking branch */
+export function getUnsyncedStatus(worktreePath: string): {
+  unpushedCommits: string[];
+  noUpstream: boolean;
+} {
+  try {
+    const output = execSync('git log @{upstream}..HEAD --oneline', {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    }).trim();
+    return {
+      unpushedCommits: output.length > 0 ? output.split('\n') : [],
+      noUpstream: false,
+    };
+  } catch {
+    return { unpushedCommits: [], noUpstream: true };
+  }
+}
+
 /** Check if a branch exists locally */
 function branchExistsLocally(branchName: string): boolean {
   try {

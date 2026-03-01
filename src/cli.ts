@@ -64,6 +64,7 @@ program
   .description('Remove worktree(s) by target list, CSV slots, or --all')
   .argument('[targets...]', 'Worktree path(s) or slot number(s); supports comma-separated values')
   .option('--all', 'Remove all registered worktrees', false)
+  .option('--force', 'Remove even if worktree has uncommitted changes or unpushed commits', false)
   .option('--keep-db', 'Keep the database (do not drop)', false)
   .option('--json', 'Output as JSON', false)
   .addHelpText(
@@ -84,6 +85,7 @@ program
       json: opts.json,
       keepDb: opts.keepDb,
       all: opts.all,
+      force: opts.force,
     });
   });
 

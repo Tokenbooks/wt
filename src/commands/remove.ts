@@ -2,7 +2,12 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { readRegistry, writeRegistry, removeAllocation, findByPath } from '../core/registry';
 import { dropDatabase } from '../core/database';
-import { getMainWorktreePath, removeWorktree } from '../core/git';
+import {
+  getMainWorktreePath,
+  removeWorktree,
+  getUncommittedChanges,
+  getUnsyncedStatus,
+} from '../core/git';
 import { loadConfig } from './setup';
 import { formatJson, success, error } from '../output';
 import type { Registry } from '../types';
@@ -11,6 +16,7 @@ interface RemoveOptions {
   readonly json: boolean;
   readonly keepDb: boolean;
   readonly all: boolean;
+  readonly force: boolean;
 }
 
 /** Read DATABASE_URL from the main worktree's .env file */
@@ -171,6 +177,36 @@ export async function removeCommand(
         continue;
       }
       seenSlots.add(resolved.slot);
+
+      if (!options.force && fs.existsSync(resolved.worktreePath)) {
+        const changes = getUncommittedChanges(resolved.worktreePath);
+        const { unpushedCommits, noUpstream } = getUnsyncedStatus(resolved.worktreePath);
+
+        if (changes.length > 0 || unpushedCommits.length > 0 || noUpstream) {
+          const reasons: string[] = [];
+          if (changes.length > 0) {
+            reasons.push('  Uncommitted changes:');
+            for (const line of changes) {
+              reasons.push(`    ${line}`);
+            }
+          }
+          if (unpushedCommits.length > 0) {
+            reasons.push('  Unpushed commits:');
+            for (const line of unpushedCommits) {
+              reasons.push(`    ${line}`);
+            }
+          }
+          if (noUpstream) {
+            reasons.push('  Branch has no upstream tracking branch.');
+          }
+          const detail = reasons.join('\n');
+          failed.push({
+            target,
+            message: `Worktree has unsaved changes. Use --force to override.\n${detail}`,
+          });
+          continue;
+        }
+      }
 
       try {
         log(`Removing slot ${resolved.slot} (${resolved.worktreePath})`);
