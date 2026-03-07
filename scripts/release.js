@@ -78,7 +78,7 @@ console.log(`Bump: ${oldVersion} → ${newVersion} (${bumpType})\n`);
 // --- quality gates ---
 
 console.log('Running quality gates...');
-const gates = ['pnpm lint', 'pnpm test', 'pnpm build'];
+const gates = ['pnpm lint', 'pnpm test', 'pnpm test:docker', 'pnpm build'];
 for (const cmd of gates) {
   console.log(`  $ ${cmd}`);
   if (!dryRun) {

@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { newCommand } from './commands/new';
 import { setupCommand } from './commands/setup';
 import { removeCommand } from './commands/remove';
+import { pruneCommand } from './commands/prune';
 import { listCommand } from './commands/list';
 import { doctorCommand } from './commands/doctor';
 import { openCommand } from './commands/open';
@@ -86,6 +87,20 @@ program
       keepDb: opts.keepDb,
       all: opts.all,
       force: opts.force,
+    });
+  });
+
+program
+  .command('prune')
+  .description('Prune Git-prunable worktrees and clean up managed resources')
+  .option('--dry-run', 'Show what would be pruned without changing anything', false)
+  .option('--keep-db', 'Keep databases for managed worktrees (do not drop)', false)
+  .option('--json', 'Output as JSON', false)
+  .action(async (opts) => {
+    await pruneCommand({
+      json: opts.json,
+      keepDb: opts.keepDb,
+      dryRun: opts.dryRun,
     });
   });
 

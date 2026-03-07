@@ -109,8 +109,11 @@ wt list
 # Check health
 wt doctor
 
-# Clean up
-wt remove feat-my-feature
+# Clean up by path or slot
+wt remove .worktrees/feat-my-feature
+
+# Prune worktrees Git already considers stale
+wt prune
 ```
 
 ### 5. Claude Code skill (optional)
@@ -174,12 +177,25 @@ Removes a worktree and cleans up its resources:
 3. Runs `git worktree remove`
 4. Removes the allocation from the registry
 
-Accepts either paths (`.worktrees/feat-my-feature`) or slot numbers (`3`), including batch formats:
+Accepts either paths (`.worktrees/feat-my-feature`) or slot numbers (`3`), not branch names, including batch formats:
 
 - `wt remove 1 2`
 - `wt remove 1,2`
 - `wt remove "1, 2"`
 - `wt remove --all`
+
+### `wt prune [--dry-run] [--keep-db] [--json]`
+
+Finds worktrees that Git already marks as prunable, then:
+
+1. Cleans up `wt`-managed resources for matching registry entries
+2. Drops their databases unless `--keep-db` is set
+3. Removes managed Redis containers if present
+4. Runs `git worktree prune`
+
+This is mainly for worktrees that were deleted manually from disk instead of through `wt remove`.
+
+Use `--dry-run` to preview what would be pruned.
 
 ### `wt list [--json]`
 
@@ -405,7 +421,7 @@ wt doctor        # Should show "All checks passed."
 # Smoke test (creates a real worktree + database)
 wt new test/wt-smoke --no-install
 wt list          # Should show the new allocation
-wt remove test-wt-smoke
+wt remove .worktrees/test-wt-smoke
 wt list          # Should be empty again
 
 # Opt-in Docker integration test for managed Redis

@@ -3,6 +3,11 @@ import * as path from 'node:path';
 
 type CommandLogger = (command: string) => void;
 
+export interface PrunableWorktree {
+  readonly path: string;
+  readonly reason: string;
+}
+
 /**
  * Get the main (bare) worktree path from git.
  * Parses `git worktree list --porcelain` to find the first entry.
@@ -95,6 +100,41 @@ export function getUnsyncedStatus(worktreePath: string): {
   } catch {
     return { unpushedCommits: [], noUpstream: true };
   }
+}
+
+/** List worktrees that Git currently marks as prunable. */
+export function listPrunableWorktrees(): PrunableWorktree[] {
+  const output = execSync('git worktree list --porcelain', {
+    encoding: 'utf-8',
+  });
+  const blocks = output
+    .split('\n\n')
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0);
+
+  const prunable: PrunableWorktree[] = [];
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    const worktreeLine = lines.find((line) => line.startsWith('worktree '));
+    const prunableLine = lines.find((line) => line.startsWith('prunable '));
+    if (!worktreeLine || !prunableLine) {
+      continue;
+    }
+
+    prunable.push({
+      path: worktreeLine.replace('worktree ', ''),
+      reason: prunableLine.replace('prunable ', ''),
+    });
+  }
+
+  return prunable;
+}
+
+/** Remove Git metadata for prunable worktrees. */
+export function pruneWorktrees(logCommand?: CommandLogger): void {
+  const command = 'git worktree prune --verbose';
+  logCommand?.(command);
+  execSync(command, { stdio: 'pipe' });
 }
 
 /** Check if a branch exists locally */

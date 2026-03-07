@@ -10,7 +10,12 @@ const mockExecSync = child_process.execSync as jest.MockedFunction<
   typeof child_process.execSync
 >;
 
-import { getMainWorktreePath, isMainWorktree } from '../src/core/git';
+import {
+  getMainWorktreePath,
+  isMainWorktree,
+  listPrunableWorktrees,
+  pruneWorktrees,
+} from '../src/core/git';
 
 describe('git', () => {
   describe('getMainWorktreePath', () => {
@@ -51,6 +56,43 @@ describe('git', () => {
 
       // Act & Assert
       expect(isMainWorktree('/Users/dev/.worktrees/feat')).toBe(false);
+    });
+  });
+
+  describe('listPrunableWorktrees', () => {
+    it('returns only worktrees marked as prunable in porcelain output', () => {
+      mockExecSync.mockReturnValue(
+        [
+          'worktree /Users/dev/project',
+          'HEAD abc123',
+          'branch refs/heads/main',
+          '',
+          'worktree /Users/dev/project/.worktrees/feat',
+          'HEAD def456',
+          'branch refs/heads/feat',
+          'prunable gitdir file points to non-existent location',
+          '',
+          'worktree /Users/dev/project/.worktrees/other',
+          'HEAD 012345',
+          'branch refs/heads/other',
+          '',
+        ].join('\n'),
+      );
+
+      expect(listPrunableWorktrees()).toEqual([
+        {
+          path: '/Users/dev/project/.worktrees/feat',
+          reason: 'gitdir file points to non-existent location',
+        },
+      ]);
+    });
+  });
+
+  describe('pruneWorktrees', () => {
+    it('runs git worktree prune with verbose logging', () => {
+      pruneWorktrees();
+
+      expect(mockExecSync).toHaveBeenCalledWith('git worktree prune --verbose', { stdio: 'pipe' });
     });
   });
 });

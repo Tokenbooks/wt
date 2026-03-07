@@ -1,13 +1,13 @@
 ---
 name: wt
-description: Manage git worktree isolation — create, list, remove worktrees with isolated databases, Redis, and ports
-argument-hint: "[new|open|list|remove|doctor|setup|init] [args...]"
+description: Manage git worktree isolation — create, list, remove, and prune worktrees with isolated databases, managed Redis, and ports
+argument-hint: "[new|open|list|remove|prune|doctor|setup|init] [args...]"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 ---
 
 # wt — Git Worktree Isolation
 
-You are managing git worktrees with isolated Postgres databases, Redis DB indexes, and ports using the `wt` CLI.
+You are managing git worktrees with isolated Postgres databases, managed Redis Docker containers, and ports using the `wt` CLI.
 
 ## Routing
 
@@ -22,7 +22,7 @@ The user wants to set up `wt` in their project for the first time. Follow these 
 Search the repository to find:
 - All `.env` files (not `.env.example`): `find . -name '.env' -not -path '*/node_modules/*' -not -path '*/.git/*'`
 - The `DATABASE_URL` value to extract the base database name (path segment after the port, before `?`)
-- Any `REDIS_URL` values and their format (with or without trailing `/0`)
+- Any `REDIS_URL` values and their base port/auth format
 - All services and their default ports — check `package.json` scripts, `docker-compose.yml`, framework config files
 - The package manager in use (`pnpm`, `npm`, `yarn`) — check for lockfiles
 
@@ -33,7 +33,7 @@ For each `.env` file, examine every variable and classify:
 | Variable contains | Patch type | Needs `service`? |
 |---|---|---|
 | Postgres connection URL (`postgresql://...`) | `database` | No |
-| Redis connection URL (`redis://...`) | `redis` | No |
+| Redis connection URL (`redis://...`) | `redis` | Yes (`redis`) |
 | Just a port number | `port` | Yes |
 | A URL containing a service port (`http://localhost:3000/...`) | `url` | Yes |
 | Anything else (API keys, secrets, flags) | Skip — do not patch | — |
@@ -47,9 +47,10 @@ Build the config file at the repository root:
   "baseDatabaseName": "<extracted from DATABASE_URL>",
   "baseWorktreePath": ".worktrees",
   "portStride": 100,
-  "maxSlots": 15,
+  "maxSlots": 50,
   "services": [
-    { "name": "<service>", "defaultPort": <port> }
+    { "name": "<service>", "defaultPort": <port> },
+    { "name": "redis", "defaultPort": <port from REDIS_URL or 6379> }
   ],
   "envFiles": [
     {
@@ -65,9 +66,10 @@ Build the config file at the repository root:
 ```
 
 Validation rules:
-- Every `port` and `url` patch must have a `service` that exists in `services`
+- Every `redis`, `port`, and `url` patch must have a `service` that exists in `services`
 - `portStride` * `maxSlots` + max default port must be < 65535
 - `baseDatabaseName` must match the actual DB name in `DATABASE_URL`
+- If using a `redis` patch, Docker must be available locally
 
 **Step 4: Install wt**
 
@@ -129,7 +131,8 @@ wt list                              # Should show "No worktree allocations foun
 wt doctor                            # Should show "All checks passed."
 wt new test/wt-smoke --no-install    # Create a test worktree
 wt list                              # Should show the allocation
-wt remove test-wt-smoke              # Clean up
+wt remove .worktrees/test-wt-smoke   # Clean up
+wt prune --dry-run                   # Should show no Git-prunable worktrees
 ```
 
 Present the results to the user.
@@ -157,7 +160,7 @@ wt new $1
 ```
 
 If it fails, check `wt doctor` for diagnostics. Common issues:
-- All slots occupied → suggest `wt list` to find stale ones, then `wt remove`
+- All slots occupied → suggest `wt list` to find stale ones, then `wt remove` or `wt prune`
 - Database connection failed → check that Postgres is running and `DATABASE_URL` in root `.env` is correct
 
 ---
@@ -178,13 +181,28 @@ Run:
 wt remove $@
 ```
 
-Accepts paths or slots, including batch slot formats:
+Accepts paths or slots, not branch names, including batch slot formats:
 - `wt remove 1 2`
 - `wt remove 1,2`
 - `wt remove "1, 2"`
 - `wt remove --all`
 
 If the user wants to keep the database, use `--keep-db`.
+
+---
+
+### `prune` — Prune Git-prunable worktrees
+
+Run:
+```bash
+wt prune $@
+```
+
+Use this when worktree directories were deleted manually and Git already marks them as prunable.
+
+Flags:
+- `--dry-run` to preview what would be pruned
+- `--keep-db` to keep databases for matching managed allocations
 
 ---
 
@@ -220,10 +238,11 @@ Show a brief help:
 ```
 Available commands:
   /wt init              — Set up wt in a new repository (discovers env files, generates config)
-  /wt new <branch>      — Create a worktree with isolated DB, Redis, and ports
+  /wt new <branch>      — Create a worktree with isolated DB, managed Redis, and ports
   /wt open <slot|branch> — Open a worktree by slot or branch (creates if not found)
   /wt list              — List all worktree allocations
   /wt remove <targets...>|--all — Remove one or more worktrees and clean up resources
+  /wt prune [--dry-run] — Prune Git-prunable worktrees and clean up matching managed resources
   /wt doctor            — Diagnose and fix environment issues
   /wt setup [path]      — Set up an existing worktree
 ```
