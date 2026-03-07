@@ -5,8 +5,8 @@ import type { PatchConfig, PatchContext } from '../src/types';
 describe('env-patcher', () => {
   const context: PatchContext = {
     dbName: 'cryptoacc_wt3',
-    redisDb: 3,
-    ports: { app: 3300, server: 3301, 'sync-exchanges': 3302 },
+    redisPort: 3379,
+    ports: { app: 3300, server: 3301, 'sync-exchanges': 3302, redis: 3379 },
   };
 
   describe('database patch', () => {
@@ -40,18 +40,18 @@ describe('env-patcher', () => {
   });
 
   describe('redis patch', () => {
-    const patches: PatchConfig[] = [{ var: 'REDIS_URL', type: 'redis' }];
+    const patches: PatchConfig[] = [{ var: 'REDIS_URL', type: 'redis', service: 'redis' }];
 
     it.each([
       [
-        'with existing DB index',
+        'with existing DB index and auth',
         'REDIS_URL=redis://:local_password@127.0.0.1:6379/0',
-        'REDIS_URL=redis://:local_password@127.0.0.1:6379/3',
+        'REDIS_URL=redis://:local_password@127.0.0.1:3379/0',
       ],
       [
         'without DB index',
         'REDIS_URL=redis://:local_password@localhost:6379',
-        'REDIS_URL=redis://:local_password@localhost:6379/3',
+        'REDIS_URL=redis://:local_password@127.0.0.1:3379/0',
       ],
     ])('%s', (_name, input, expected) => {
       // Act
@@ -129,7 +129,7 @@ describe('env-patcher', () => {
 
       const patches: PatchConfig[] = [
         { var: 'DATABASE_URL', type: 'database' },
-        { var: 'REDIS_URL', type: 'redis' },
+        { var: 'REDIS_URL', type: 'redis', service: 'redis' },
         { var: 'PORT', type: 'port', service: 'server' },
       ];
 
@@ -139,7 +139,7 @@ describe('env-patcher', () => {
       // Assert
       const lines = result.split('\n');
       expect(lines[0]).toContain('cryptoacc_wt3');
-      expect(lines[1]).toContain('/3');
+      expect(lines[1]).toContain(':3379/0');
       expect(lines[2]).toBe('PORT=3301');
       expect(lines[3]).toBe('# A comment');
       expect(lines[4]).toBe('SOME_OTHER_VAR=hello');

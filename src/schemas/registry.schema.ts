@@ -5,7 +5,8 @@ export const allocationSchema = z.object({
   worktreePath: z.string().min(1),
   branchName: z.string().min(1),
   dbName: z.string().min(1),
-  redisDb: z.number().int().min(1),
+  redisDb: z.number().int().min(0).optional(),
+  redisContainerName: z.string().min(1).optional(),
   ports: z.record(z.string(), z.number().int().positive()),
   createdAt: z.string().datetime(),
 });

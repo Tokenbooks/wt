@@ -21,6 +21,7 @@
     "build": "tsc && node scripts/link-cli.js",
     "dev": "tsc --watch",
     "test": "jest",
+    "test:docker": "node scripts/test-docker.js",
     "lint": "eslint 'src/**/*.ts' '__tests__/**/*.ts'",
     "prepack": "tsc",
     "release": "node scripts/release.js",

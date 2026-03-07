@@ -29,7 +29,13 @@ jobs:
           PKG=$(node -p "require('./package.json').version")
           [ "$TAG" = "$PKG" ] || { echo "::error::Tag v$TAG != package.json $PKG"; exit 1; }
 
+      - run: pnpm lint
+
       - run: pnpm test
+
+      - run: pnpm test:docker
+
+      - run: pnpm build
 
       - run: pnpm publish --access public --no-git-checks --provenance
         env:

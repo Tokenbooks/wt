@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { readRegistry, writeRegistry, removeAllocation, findByPath } from '../core/registry';
 import { dropDatabase } from '../core/database';
+import { removeManagedRedisContainer, usesManagedRedis } from '../core/managed-redis';
 import {
   getMainWorktreePath,
   removeWorktree,
@@ -34,6 +35,7 @@ interface ResolvedTarget {
   readonly slot: number;
   readonly worktreePath: string;
   readonly dbName: string;
+  readonly redisContainerName?: string;
 }
 
 interface ResolvedTargetError {
@@ -46,6 +48,7 @@ interface RemoveSuccess {
   readonly worktreePath: string;
   readonly dbName: string;
   readonly dbDropped: boolean;
+  readonly redisContainerRemoved: boolean;
 }
 
 interface RemoveFailure {
@@ -90,6 +93,7 @@ function resolveTarget(
       slot,
       worktreePath: allocation.worktreePath,
       dbName: allocation.dbName,
+      redisContainerName: allocation.redisContainerName,
     };
   }
 
@@ -102,6 +106,7 @@ function resolveTarget(
     slot: found[0],
     worktreePath: found[1].worktreePath,
     dbName: found[1].dbName,
+    redisContainerName: found[1].redisContainerName,
   };
 }
 
@@ -157,11 +162,13 @@ export async function removeCommand(
       }
     }
 
+    const config = loadConfig(mainRoot);
+    const managedRedisEnabled = usesManagedRedis(config);
     const dbContext = options.keepDb
       ? null
       : {
         databaseUrl: readDatabaseUrl(mainRoot),
-        baseDatabaseName: loadConfig(mainRoot).baseDatabaseName,
+        baseDatabaseName: config.baseDatabaseName,
       };
     const seenSlots = new Set<number>();
     const removed: RemoveSuccess[] = [];
@@ -222,6 +229,10 @@ export async function removeCommand(
           log(`Skipping database drop for '${resolved.dbName}' (--keep-db).`);
         }
 
+        const redisContainerRemoved = managedRedisEnabled || resolved.redisContainerName !== undefined
+          ? removeManagedRedisContainer(mainRoot, resolved.slot, log)
+          : false;
+
         if (fs.existsSync(resolved.worktreePath)) {
           removeWorktree(
             resolved.worktreePath,
@@ -238,6 +249,7 @@ export async function removeCommand(
           worktreePath: resolved.worktreePath,
           dbName: resolved.dbName,
           dbDropped: !options.keepDb,
+          redisContainerRemoved,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -271,6 +283,7 @@ export async function removeCommand(
         for (const item of removed) {
           console.log(`  Slot ${item.slot}: ${item.worktreePath}`);
           console.log(`    Database: ${item.dbName} ${item.dbDropped ? '(dropped)' : '(kept)'}`);
+          console.log(`    Redis: ${item.redisContainerRemoved ? '(removed)' : '(not found)'}`);
         }
       }
       if (failed.length > 0) {

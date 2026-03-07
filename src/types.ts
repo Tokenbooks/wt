@@ -23,7 +23,7 @@ export type Allocation = z.infer<typeof allocationSchema>;
 /** Context passed to env patcher with computed values for a slot */
 export interface PatchContext {
   readonly dbName: string;
-  readonly redisDb: number;
+  readonly redisPort?: number;
   readonly ports: Record<string, number>;
 }
 

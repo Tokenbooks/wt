@@ -1,8 +1,19 @@
 import * as path from 'node:path';
 import { readRegistry, writeRegistry, addAllocation } from '../core/registry';
-import { calculatePorts, calculateDbName, findAvailableSlot } from '../core/slot-allocator';
+import {
+  calculatePorts,
+  calculateDbName,
+  findAvailablePortSafeSlot,
+  findUnavailableServicePorts,
+} from '../core/slot-allocator';
 import { copyAndPatchAllEnvFiles } from '../core/env-patcher';
 import { createDatabase, databaseExists } from '../core/database';
+import {
+  ensureManagedRedisContainer,
+  getAllocationServices,
+  readManagedRedisSourceUrl,
+  usesManagedRedis,
+} from '../core/managed-redis';
 import { getMainWorktreePath, createWorktree, getBranchName } from '../core/git';
 import { formatJson, formatSetupSummary, success, error } from '../output';
 import { loadConfig } from './setup';
@@ -43,6 +54,7 @@ export async function createNewWorktree(
 
   const mainRoot = getMainWorktreePath();
   const config = loadConfig(mainRoot);
+  const services = getAllocationServices(config);
   let registry = readRegistry(mainRoot);
 
   // Determine slot
@@ -55,10 +67,26 @@ export async function createNewWorktree(
     if (String(slot) in registry.allocations) {
       throw new Error(`Slot ${slot} is already occupied.`);
     }
+    const requestedPorts = calculatePorts(slot, services, config.portStride);
+    const unavailablePorts = await findUnavailableServicePorts(requestedPorts);
+    if (unavailablePorts.length > 0) {
+      const detail = unavailablePorts
+        .map(({ service, port }) => `${service}:${port}`)
+        .join(', ');
+      throw new Error(`Slot ${slot} has ports already in use: ${detail}`);
+    }
   } else {
-    const available = findAvailableSlot(registry, config.maxSlots);
+    const available = await findAvailablePortSafeSlot(
+      registry,
+      config.maxSlots,
+      services,
+      config.portStride,
+    );
     if (available === null) {
-      throw new Error(`All ${config.maxSlots} slots are occupied. Remove a worktree first.`);
+      throw new Error(
+        `All ${config.maxSlots} slots are occupied or blocked by ports already in use. ` +
+        'Remove a worktree, stop conflicting services, or increase maxSlots.',
+      );
     }
     slot = available;
   }
@@ -76,7 +104,21 @@ export async function createNewWorktree(
 
   // Compute isolation params
   const dbName = calculateDbName(slot, config.baseDatabaseName);
-  const ports = calculatePorts(slot, config.services, config.portStride);
+  const ports = calculatePorts(slot, services, config.portStride);
+  const redisSourceUrl = usesManagedRedis(config)
+    ? readManagedRedisSourceUrl(mainRoot, config)
+    : null;
+  const redisContainerName = usesManagedRedis(config)
+    ? ensureManagedRedisContainer({
+      mainRoot,
+      slot,
+      branchName: actualBranch,
+      worktreePath,
+      port: ports.redis!,
+      sourceUrl: redisSourceUrl,
+      log,
+    })
+    : undefined;
 
   // Create database
   const databaseUrl = readDatabaseUrl(mainRoot);
@@ -97,7 +139,7 @@ export async function createNewWorktree(
   log(`Patching ${config.envFiles.length} env file(s)...`);
   copyAndPatchAllEnvFiles(config, mainRoot, worktreePath, {
     dbName,
-    redisDb: slot,
+    redisPort: ports.redis,
     ports,
   });
 
@@ -106,7 +148,7 @@ export async function createNewWorktree(
     worktreePath,
     branchName: actualBranch,
     dbName,
-    redisDb: slot,
+    redisContainerName,
     ports,
     createdAt: new Date().toISOString(),
   };

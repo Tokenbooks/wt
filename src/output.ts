@@ -32,7 +32,7 @@ export function formatAllocationTable(
       .map(([name, port]) => `${name}:${port}`)
       .join(' ');
     const status = fs.existsSync(alloc.worktreePath) ? 'ok' : 'stale';
-    return padRow([slot, alloc.branchName, alloc.dbName, String(alloc.redisDb), portStr, status]);
+    return padRow([slot, alloc.branchName, alloc.dbName, formatRedisCell(alloc), portStr, status]);
   });
 
   return [header, separator, ...rows].join('\n');
@@ -40,8 +40,18 @@ export function formatAllocationTable(
 
 /** Pad columns to fixed widths for table output */
 function padRow(cols: string[]): string {
-  const widths = [6, 30, 20, 7, 35, 8];
+  const widths = [6, 30, 20, 18, 35, 8];
   return cols.map((col, i) => col.padEnd(widths[i] ?? 10)).join('');
+}
+
+function formatRedisCell(alloc: Allocation): string {
+  if (alloc.redisContainerName) {
+    return alloc.ports.redis ? `port:${alloc.ports.redis}` : alloc.redisContainerName;
+  }
+  if (alloc.redisDb !== undefined) {
+    return `db:${alloc.redisDb}`;
+  }
+  return '-';
 }
 
 /** Print a setup summary for human output */
@@ -54,7 +64,9 @@ export function formatSetupSummary(slot: number, alloc: Allocation): string {
     `Worktree configured (slot ${slot}):`,
     `  Branch:   ${alloc.branchName}`,
     `  Database: ${alloc.dbName}`,
-    `  Redis DB: ${alloc.redisDb}`,
+    alloc.redisContainerName
+      ? `  Redis:    ${alloc.redisContainerName}${alloc.ports.redis ? ` (port ${alloc.ports.redis})` : ''}`
+      : `  Redis DB: ${alloc.redisDb ?? '-'}`,
     `  Ports:`,
     portLines,
     `  Path:     ${alloc.worktreePath}`,
