@@ -4,3 +4,4 @@ coverage/
 *.tsbuildinfo
 junit.xml
 .worktree-registry.json
+.DS_Store
