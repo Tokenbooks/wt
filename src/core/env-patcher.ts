@@ -5,6 +5,7 @@ import { patchManagedRedisUrl } from './managed-redis';
 
 type PortPatch = Extract<PatchConfig, { type: 'port' }>;
 type UrlPatch = Extract<PatchConfig, { type: 'url' }>;
+type BranchPatch = Extract<PatchConfig, { type: 'branch' }>;
 
 /**
  * Apply a single patch to an env var value.
@@ -24,6 +25,8 @@ function applyPatch(
       return patchPort(patch, context);
     case 'url':
       return patchUrlPort(value, patch, context);
+    case 'branch':
+      return patchBranch(patch, context);
   }
 }
 
@@ -76,6 +79,17 @@ function patchUrlPort(
 }
 
 /**
+ * Replace an env var value with the current git branch name.
+ * Useful for setting APP_ENV to distinguish worktree deployments in telemetry.
+ */
+function patchBranch(_patch: BranchPatch, context: PatchContext): string {
+  if (context.branchName === undefined) {
+    throw new Error('Branch patch requires branchName in context.');
+  }
+  return context.branchName;
+}
+
+/**
  * Patch all matching env vars in a file's content.
  * Processes line-by-line, replacing values for matching VAR= lines.
  */
@@ -105,7 +119,7 @@ export function patchEnvContent(
     });
 
   // Append vars declared in patches but missing from the source file.
-  // Only "port" patches can be computed without a source value.
+  // "port" and "branch" patches can be computed without a source value.
   for (const patch of patches) {
     if (found.has(patch.var)) continue;
     if (patch.type === 'port') {
@@ -113,6 +127,8 @@ export function patchEnvContent(
       if (serviceName && serviceName in context.ports) {
         lines.push(`${patch.var}=${context.ports[serviceName]}`);
       }
+    } else if (patch.type === 'branch' && context.branchName !== undefined) {
+      lines.push(`${patch.var}=${context.branchName}`);
     }
   }
 

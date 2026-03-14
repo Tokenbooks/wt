@@ -25,6 +25,7 @@ export interface PatchContext {
   readonly dbName: string;
   readonly redisPort?: number;
   readonly ports: Record<string, number>;
+  readonly branchName?: string;
 }
 
 /** Result of CLI operations for --json output */

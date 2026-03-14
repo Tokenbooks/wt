@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const PATCH_TYPES = ['database', 'redis', 'port', 'url'] as const;
+const PATCH_TYPES = ['database', 'redis', 'port', 'url', 'branch'] as const;
 
 /** Schema for a single env var patch rule */
 export const patchSchema = z.discriminatedUnion('type', [
@@ -22,6 +22,10 @@ export const patchSchema = z.discriminatedUnion('type', [
     var: z.string().min(1),
     type: z.literal(PATCH_TYPES[3]),
     service: z.string().min(1),
+  }),
+  z.object({
+    var: z.string().min(1),
+    type: z.literal(PATCH_TYPES[4]),
   }),
 ]);
 

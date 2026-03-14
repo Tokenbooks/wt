@@ -290,6 +290,7 @@ export async function setupCommand(
       dbName,
       redisPort: ports.redis,
       ports,
+      branchName,
     });
 
     // Update registry

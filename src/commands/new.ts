@@ -141,6 +141,7 @@ export async function createNewWorktree(
     dbName,
     redisPort: ports.redis,
     ports,
+    branchName: actualBranch,
   });
 
   // Update registry

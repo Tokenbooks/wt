@@ -7,6 +7,7 @@ describe('env-patcher', () => {
     dbName: 'cryptoacc_wt3',
     redisPort: 3379,
     ports: { app: 3300, server: 3301, 'sync-exchanges': 3302, redis: 3379 },
+    branchName: 'chore/observability',
   };
 
   describe('database patch', () => {
@@ -113,6 +114,60 @@ describe('env-patcher', () => {
       const result = patchEnvContent('PORT=3001', patches, context);
 
       expect(result).toBe('PORT=3301');
+    });
+  });
+
+  describe('branch patch', () => {
+    const patches: PatchConfig[] = [
+      { var: 'APP_ENV', type: 'branch' },
+    ];
+
+    it('replaces value with branch name', () => {
+      // Act
+      const result = patchEnvContent('APP_ENV=production', patches, context);
+
+      // Assert
+      expect(result).toBe('APP_ENV=chore/observability');
+    });
+
+    it('preserves double quotes around the value', () => {
+      // Act
+      const result = patchEnvContent('APP_ENV="production"', patches, context);
+
+      // Assert
+      expect(result).toBe('APP_ENV="chore/observability"');
+    });
+
+    it('preserves single quotes around the value', () => {
+      // Act
+      const result = patchEnvContent("APP_ENV='production'", patches, context);
+
+      // Assert
+      expect(result).toBe("APP_ENV='chore/observability'");
+    });
+
+    it('appends var when missing from source', () => {
+      // Arrange
+      const content = 'DATABASE_URL=postgresql://localhost/mydb\nSOME_VAR=hello';
+
+      // Act
+      const result = patchEnvContent(content, patches, context);
+
+      // Assert
+      expect(result).toBe(
+        'DATABASE_URL=postgresql://localhost/mydb\nSOME_VAR=hello\nAPP_ENV=chore/observability',
+      );
+    });
+
+    it('handles branch names containing slashes', () => {
+      // Arrange
+      const slashContext: PatchContext = { ...context, branchName: 'feat/my-feature/sub-task' };
+
+      // Act
+      const result = patchEnvContent('APP_ENV=main', patches, slashContext);
+
+      // Assert
+      expect(result).toBe('APP_ENV=feat/my-feature/sub-task');
     });
   });
 
