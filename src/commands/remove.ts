@@ -10,7 +10,7 @@ import {
   getUnsyncedStatus,
 } from '../core/git';
 import { loadConfig } from './setup';
-import { formatJson, success, error } from '../output';
+import { extractErrorMessage, formatJson, success, error } from '../output';
 import type { Registry } from '../types';
 
 interface RemoveOptions {
@@ -252,8 +252,7 @@ export async function removeCommand(
           redisContainerRemoved,
         });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        failed.push({ target, message });
+        failed.push({ target, message: extractErrorMessage(err) });
       }
     }
 
@@ -301,7 +300,7 @@ export async function removeCommand(
       process.exitCode = 1;
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = extractErrorMessage(err);
     if (options.json) {
       console.log(formatJson(error('REMOVE_FAILED', message)));
     } else {

@@ -1,6 +1,38 @@
 import * as fs from 'node:fs';
 import type { Allocation, CliResult } from './types';
 
+/** Extract a meaningful message from any error, including AggregateError and child-process errors. */
+export function extractErrorMessage(err: unknown): string {
+  if (!(err instanceof Error)) {
+    return String(err) || 'Unknown error';
+  }
+
+  // AggregateError (e.g. pg connection failure trying IPv4 + IPv6)
+  if ('errors' in err && Array.isArray((err as { errors?: unknown[] }).errors)) {
+    const inner = (err as { errors: unknown[] }).errors;
+    const messages = inner
+      .map((e) => (e instanceof Error ? e.message : String(e)))
+      .filter((m) => m.length > 0);
+    if (messages.length > 0) {
+      return messages.join('; ');
+    }
+  }
+
+  if (err.message) {
+    return err.message;
+  }
+
+  // execSync / execFileSync errors carry stderr
+  if ('stderr' in err) {
+    const stderr = String((err as { stderr?: unknown }).stderr ?? '').trim();
+    if (stderr) {
+      return stderr;
+    }
+  }
+
+  return String(err) || 'Unknown error';
+}
+
 /** Format a CliResult as JSON string */
 export function formatJson<T>(result: CliResult<T>): string {
   return JSON.stringify(result, null, 2);

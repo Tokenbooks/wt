@@ -4,7 +4,7 @@ import { readRegistry, writeRegistry, removeAllocation } from '../core/registry'
 import { databaseExists, dropDatabase, listDatabasesByPattern } from '../core/database';
 import { getMainWorktreePath } from '../core/git';
 import { loadConfig } from './setup';
-import { formatJson, success, error } from '../output';
+import { extractErrorMessage, formatJson, success, error } from '../output';
 
 interface DoctorOptions {
   readonly json: boolean;
@@ -129,7 +129,7 @@ export async function doctorCommand(options: DoctorOptions): Promise<void> {
       console.log('\nRun with --fix to auto-repair stale entries and orphaned databases.');
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = extractErrorMessage(err);
     if (options.json) {
       console.log(formatJson(error('DOCTOR_FAILED', message)));
     } else {

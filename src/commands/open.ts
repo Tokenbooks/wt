@@ -1,7 +1,7 @@
 import { readRegistry } from '../core/registry';
 import { getMainWorktreePath } from '../core/git';
 import { createNewWorktree } from './new';
-import { formatAllocationTable, formatJson, success, error } from '../output';
+import { extractErrorMessage, formatAllocationTable, formatJson, success, error } from '../output';
 
 interface OpenOptions {
   readonly json: boolean;
@@ -70,7 +70,7 @@ export async function openCommand(
       console.log(allocation.worktreePath);
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = extractErrorMessage(err);
     if (options.json) {
       console.log(formatJson(error('OPEN_FAILED', message)));
     } else {

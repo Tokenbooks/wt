@@ -19,7 +19,7 @@ import {
   usesManagedRedis,
 } from '../core/managed-redis';
 import { getMainWorktreePath, isMainWorktree, getBranchName } from '../core/git';
-import { formatJson, formatSetupSummary, success, error } from '../output';
+import { extractErrorMessage, formatJson, formatSetupSummary, success, error } from '../output';
 import type { Allocation, WtConfig } from '../types';
 
 interface SetupOptions {
@@ -319,7 +319,7 @@ export async function setupCommand(
       console.log(formatSetupSummary(slot, allocation));
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = extractErrorMessage(err);
     if (options.json) {
       console.log(formatJson(error('SETUP_FAILED', message)));
     } else {

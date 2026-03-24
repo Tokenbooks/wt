@@ -9,7 +9,7 @@ import {
 } from '../core/git';
 import { removeManagedRedisContainer } from '../core/managed-redis';
 import { loadConfig } from './setup';
-import { formatJson, success, error } from '../output';
+import { extractErrorMessage, formatJson, success, error } from '../output';
 import type { Allocation } from '../types';
 
 interface PruneOptions {
@@ -162,7 +162,7 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
           reason: item.reason,
         });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = extractErrorMessage(err);
         failed.push({ worktreePath: item.allocation.worktreePath, message });
       }
     }
@@ -216,7 +216,7 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
       process.exitCode = 1;
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = extractErrorMessage(err);
     if (options.json) {
       console.log(formatJson(error('PRUNE_FAILED', message)));
     } else {

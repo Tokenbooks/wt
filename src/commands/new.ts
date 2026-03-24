@@ -15,7 +15,7 @@ import {
   usesManagedRedis,
 } from '../core/managed-redis';
 import { getMainWorktreePath, createWorktree, getBranchName } from '../core/git';
-import { formatJson, formatSetupSummary, success, error } from '../output';
+import { extractErrorMessage, formatJson, formatSetupSummary, success, error } from '../output';
 import { loadConfig } from './setup';
 import type { Allocation } from '../types';
 import { execSync } from 'node:child_process';
@@ -185,7 +185,7 @@ export async function newCommand(
       console.log(formatSetupSummary(slot, allocation));
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = extractErrorMessage(err);
     if (options.json) {
       console.log(formatJson(error('NEW_FAILED', message)));
     } else {
