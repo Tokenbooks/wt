@@ -14,7 +14,13 @@ import {
   readManagedRedisSourceUrl,
   usesManagedRedis,
 } from '../core/managed-redis';
-import { getMainWorktreePath, createWorktree, getBranchName } from '../core/git';
+import {
+  getMainWorktreePath,
+  createWorktree,
+  getBranchName,
+  resolveWorktreeBranch,
+  type WorktreeBranchSelection,
+} from '../core/git';
 import { extractErrorMessage, formatJson, formatSetupSummary, success, error } from '../output';
 import { loadConfig } from './setup';
 import type { Allocation } from '../types';
@@ -28,8 +34,9 @@ interface NewOptions {
 }
 
 export interface CreateWorktreeResult {
-  slot: number;
-  allocation: Allocation;
+  readonly slot: number;
+  readonly allocation: Allocation;
+  readonly branchSelection: WorktreeBranchSelection;
 }
 
 /** Read DATABASE_URL from the main worktree's .env file */
@@ -51,6 +58,7 @@ export async function createNewWorktree(
   const log = options.quiet
     ? () => {}
     : (msg: string) => process.stderr.write(`${msg}\n`);
+  const warn = (msg: string) => process.stderr.write(`${msg}\n`);
 
   const mainRoot = getMainWorktreePath();
   const config = loadConfig(mainRoot);
@@ -95,9 +103,17 @@ export async function createNewWorktree(
 
   // Create worktree
   const basePath = path.join(mainRoot, config.baseWorktreePath);
+  const branchSelection = resolveWorktreeBranch(
+    branchName,
+    (command) => log(`Running: ${command}`),
+  );
+  if (branchSelection.originCheckError) {
+    warn(`Failed to check origin for '${branchName}': ${branchSelection.originCheckError}`);
+  }
+  log(describeBranchSelection(branchSelection));
   const worktreePath = createWorktree(
     basePath,
-    branchName,
+    branchSelection,
     (command) => log(`Running: ${command}`),
   );
   const actualBranch = getBranchName(worktreePath);
@@ -165,7 +181,7 @@ export async function createNewWorktree(
   }
 
   log(`Ready — slot ${slot}, branch '${actualBranch}'.`);
-  return { slot, allocation };
+  return { slot, allocation, branchSelection };
 }
 
 /** Create a new worktree with full environment isolation */
@@ -174,15 +190,28 @@ export async function newCommand(
   options: NewOptions,
 ): Promise<void> {
   try {
-    const { slot, allocation } = await createNewWorktree(branchName, {
+    const { slot, allocation, branchSelection } = await createNewWorktree(branchName, {
       ...options,
       quiet: options.json,
     });
 
     if (options.json) {
-      console.log(formatJson(success({ slot, ...allocation })));
+      console.log(
+        formatJson(
+          success({
+            slot,
+            ...allocation,
+            branchSource: branchSelection.source,
+            branchSourceLabel: branchSelection.sourceLabel,
+          }),
+        ),
+      );
     } else {
-      console.log(formatSetupSummary(slot, allocation));
+      console.log(
+        formatSetupSummary(slot, allocation, {
+          branchSourceLabel: branchSelection.sourceLabel,
+        }),
+      );
     }
   } catch (err) {
     const message = extractErrorMessage(err);
@@ -192,5 +221,16 @@ export async function newCommand(
       console.error(`Failed to create worktree: ${message}`);
     }
     process.exitCode = 1;
+  }
+}
+
+function describeBranchSelection(branchSelection: WorktreeBranchSelection): string {
+  switch (branchSelection.source) {
+    case 'origin':
+      return `Using branch '${branchSelection.branchName}' from ${branchSelection.sourceLabel}.`;
+    case 'local-existing':
+      return `Using existing local branch '${branchSelection.branchName}'.`;
+    case 'local-new':
+      return `Using branch '${branchSelection.branchName}' as a fresh local branch.`;
   }
 }

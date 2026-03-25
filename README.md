@@ -134,7 +134,7 @@ Then use `/wt init`, `/wt new feat/foo`, `/wt doctor`, etc. inside Claude Code.
 Creates a new git worktree and sets up its isolated environment:
 
 1. Allocates the next available slot (or uses `--slot N`)
-2. Runs `git worktree add .worktrees/<slug> -b <branch>`
+2. Checks whether `origin/<branch>` exists; if it does, fetches it and creates a tracking local branch, otherwise creates a fresh local branch
 3. Creates a new Postgres database from the main DB as template
 4. Copies all configured `.env` files, patching each with slot-specific values
 5. Starts a managed Redis Docker container if Redis patching is configured

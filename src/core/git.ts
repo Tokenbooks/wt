@@ -8,6 +8,16 @@ export interface PrunableWorktree {
   readonly reason: string;
 }
 
+export type WorktreeBranchSource = 'origin' | 'local-new' | 'local-existing';
+
+export interface WorktreeBranchSelection {
+  readonly branchName: string;
+  readonly source: WorktreeBranchSource;
+  readonly sourceLabel: string;
+  readonly startPoint?: string;
+  readonly originCheckError?: string;
+}
+
 /**
  * Get the main (bare) worktree path from git.
  * Parses `git worktree list --porcelain` to find the first entry.
@@ -34,25 +44,61 @@ export function isMainWorktree(targetPath: string): boolean {
 
 /**
  * Create a new git worktree at the given base path for the specified branch.
- * If the branch already exists, checks it out; otherwise creates it with -b.
+ * The branch selection must already be resolved before calling this helper.
  */
 export function createWorktree(
   basePath: string,
-  branchName: string,
+  branch: WorktreeBranchSelection,
   logCommand?: CommandLogger,
 ): string {
-  const slug = branchName.replace(/\//g, '-');
+  const slug = branch.branchName.replace(/\//g, '-');
   const worktreePath = path.resolve(basePath, slug);
-
-  const branchExists = branchExistsLocally(branchName);
-  const args = branchExists
-    ? `"${worktreePath}" "${branchName}"`
-    : `"${worktreePath}" -b "${branchName}"`;
-
-  const command = `git worktree add ${args}`;
+  const command = buildWorktreeAddCommand(worktreePath, branch);
   logCommand?.(command);
   execSync(command, { stdio: 'pipe' });
   return worktreePath;
+}
+
+/**
+ * Resolve which branch ref should back a new worktree.
+ * Prefers a fresh local branch that tracks origin when the remote branch exists.
+ */
+export function resolveWorktreeBranch(
+  branchName: string,
+  logCommand?: CommandLogger,
+): WorktreeBranchSelection {
+  if (branchExistsLocally(branchName)) {
+    return {
+      branchName,
+      source: 'local-existing',
+      sourceLabel: 'existing local branch',
+    };
+  }
+
+  try {
+    if (branchExistsOnOrigin(branchName, logCommand)) {
+      fetchOriginBranch(branchName, logCommand);
+      return {
+        branchName,
+        source: 'origin',
+        sourceLabel: `origin/${branchName}`,
+        startPoint: `origin/${branchName}`,
+      };
+    }
+  } catch (err) {
+    return {
+      branchName,
+      source: 'local-new',
+      sourceLabel: 'fresh local branch',
+      originCheckError: extractCommandErrorMessage(err),
+    };
+  }
+
+  return {
+    branchName,
+    source: 'local-new',
+    sourceLabel: 'fresh local branch',
+  };
 }
 
 /** Remove a git worktree by path */
@@ -147,4 +193,77 @@ function branchExistsLocally(branchName: string): boolean {
   } catch {
     return false;
   }
+}
+
+function buildWorktreeAddCommand(
+  worktreePath: string,
+  branch: WorktreeBranchSelection,
+): string {
+  switch (branch.source) {
+    case 'origin':
+      return `git worktree add "${worktreePath}" --track -b "${branch.branchName}" "${branch.startPoint}"`;
+    case 'local-existing':
+      return `git worktree add "${worktreePath}" "${branch.branchName}"`;
+    case 'local-new':
+      return `git worktree add "${worktreePath}" -b "${branch.branchName}"`;
+  }
+}
+
+function branchExistsOnOrigin(
+  branchName: string,
+  logCommand?: CommandLogger,
+): boolean {
+  const command = `git ls-remote --exit-code --heads origin "${branchName}"`;
+  logCommand?.(command);
+
+  try {
+    execSync(command, {
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    });
+    return true;
+  } catch (err) {
+    if (getExitStatus(err) === 2) {
+      return false;
+    }
+    throw err;
+  }
+}
+
+function fetchOriginBranch(
+  branchName: string,
+  logCommand?: CommandLogger,
+): void {
+  const command =
+    `git fetch origin "refs/heads/${branchName}:refs/remotes/origin/${branchName}"`;
+  logCommand?.(command);
+  execSync(command, { stdio: 'pipe' });
+}
+
+function getExitStatus(err: unknown): number | undefined {
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'status' in err &&
+    typeof (err as { status?: unknown }).status === 'number'
+  ) {
+    return (err as { status: number }).status;
+  }
+  return undefined;
+}
+
+function extractCommandErrorMessage(err: unknown): string {
+  if (!(err instanceof Error)) {
+    return String(err) || 'Unknown error';
+  }
+  if ('stderr' in err) {
+    const stderr = String((err as { stderr?: unknown }).stderr ?? '').trim();
+    if (stderr) {
+      return stderr;
+    }
+  }
+  if (err.message) {
+    return err.message;
+  }
+  return String(err) || 'Unknown error';
 }

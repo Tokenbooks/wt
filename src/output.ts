@@ -87,7 +87,11 @@ function formatRedisCell(alloc: Allocation): string {
 }
 
 /** Print a setup summary for human output */
-export function formatSetupSummary(slot: number, alloc: Allocation): string {
+export function formatSetupSummary(
+  slot: number,
+  alloc: Allocation,
+  options?: { branchSourceLabel?: string },
+): string {
   const portLines = Object.entries(alloc.ports)
     .map(([name, port]) => `  ${name}: ${port}`)
     .join('\n');
@@ -95,6 +99,7 @@ export function formatSetupSummary(slot: number, alloc: Allocation): string {
   return [
     `Worktree configured (slot ${slot}):`,
     `  Branch:   ${alloc.branchName}`,
+    ...(options?.branchSourceLabel ? [`  Source:   ${options.branchSourceLabel}`] : []),
     `  Database: ${alloc.dbName}`,
     alloc.redisContainerName
       ? `  Redis:    ${alloc.redisContainerName}${alloc.ports.redis ? ` (port ${alloc.ports.redis})` : ''}`
