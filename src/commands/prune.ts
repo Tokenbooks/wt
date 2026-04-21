@@ -7,7 +7,12 @@ import {
   listPrunableWorktrees,
   pruneWorktrees,
 } from '../core/git';
-import { removeManagedRedisContainer } from '../core/managed-redis';
+import {
+  listManagedRedisContainersForRepo,
+  removeManagedRedisContainer,
+  usesManagedRedis,
+  type ManagedRedisContainerSummary,
+} from '../core/managed-redis';
 import { loadConfig } from './setup';
 import { extractErrorMessage, formatJson, success, error } from '../output';
 import type { Allocation } from '../types';
@@ -18,10 +23,13 @@ interface PruneOptions {
   readonly dryRun: boolean;
 }
 
+type PrunableReasonSource = 'git' | 'missing-path';
+
 interface PrunableManagedAllocation {
   readonly slot: number;
   readonly allocation: Allocation;
   readonly reason: string;
+  readonly reasonSource: PrunableReasonSource;
 }
 
 interface PrunedManagedWorktree {
@@ -31,11 +39,20 @@ interface PrunedManagedWorktree {
   readonly dbDropped: boolean;
   readonly redisContainerRemoved: boolean;
   readonly reason: string;
+  readonly reasonSource: PrunableReasonSource;
 }
 
 interface PrunedUnmanagedWorktree {
   readonly worktreePath: string;
   readonly reason: string;
+}
+
+interface PrunedOrphanContainer {
+  readonly slot: number;
+  readonly containerName: string;
+  readonly branch?: string;
+  readonly worktreePath?: string;
+  readonly removed: boolean;
 }
 
 interface PruneFailure {
@@ -54,7 +71,17 @@ function readDatabaseUrl(mainRoot: string): string {
   return match[1];
 }
 
-/** Prune Git-prunable worktrees and clean up wt-managed resources for matching slots. */
+/**
+ * Prune stale worktrees and clean up wt-managed resources.
+ *
+ * Covers three independent leak sources:
+ * 1. Git-prunable worktrees (disk entry missing but Git still tracks it).
+ * 2. Registry allocations whose worktreePath no longer exists on disk — these
+ *    can survive step 1 when Git itself has already been pruned.
+ * 3. Managed Redis containers labeled for this repo whose slot is no longer
+ *    in the registry — leftovers from partially-failed `wt new` runs or from
+ *    worktrees cleaned up by something other than `wt remove`.
+ */
 export async function pruneCommand(options: PruneOptions): Promise<void> {
   const log = options.json
     ? () => {}
@@ -62,13 +89,15 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
 
   try {
     const mainRoot = getMainWorktreePath();
+    const config = loadConfig(mainRoot);
     let registry = readRegistry(mainRoot);
-    const prunable = listPrunableWorktrees();
+    const gitPrunable = listPrunableWorktrees();
 
     const managed: PrunableManagedAllocation[] = [];
     const unmanaged: PrunedUnmanagedWorktree[] = [];
+    const seenSlots = new Set<number>();
 
-    for (const entry of prunable) {
+    for (const entry of gitPrunable) {
       const found = findByPath(registry, entry.path);
       if (!found) {
         unmanaged.push({ worktreePath: entry.path, reason: entry.reason });
@@ -79,53 +108,94 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
         slot: found[0],
         allocation: found[1],
         reason: entry.reason,
+        reasonSource: 'git',
       });
+      seenSlots.add(found[0]);
     }
 
-    const payloadBase = {
-      prunableCount: prunable.length,
-      managed,
-      unmanaged,
-    };
+    for (const [slotStr, allocation] of Object.entries(registry.allocations)) {
+      const slot = Number(slotStr);
+      if (seenSlots.has(slot)) {
+        continue;
+      }
+      if (!fs.existsSync(allocation.worktreePath)) {
+        managed.push({
+          slot,
+          allocation,
+          reason: `worktree path does not exist on disk: ${allocation.worktreePath}`,
+          reasonSource: 'missing-path',
+        });
+        seenSlots.add(slot);
+      }
+    }
+
+    const activeSlots = new Set(
+      Object.keys(registry.allocations).map((slotStr) => Number(slotStr)),
+    );
+    const orphanContainers: ManagedRedisContainerSummary[] = usesManagedRedis(config)
+      ? listManagedRedisContainersForRepo(mainRoot).filter((c) => !activeSlots.has(c.slot))
+      : [];
+
+    const nothingToDo =
+      managed.length === 0 && unmanaged.length === 0 && orphanContainers.length === 0;
 
     if (options.dryRun) {
+      const payload = {
+        prunableCount: gitPrunable.length,
+        managed,
+        unmanaged,
+        orphanContainers,
+      };
       if (options.json) {
-        console.log(formatJson(success(payloadBase)));
-      } else if (prunable.length === 0) {
-        console.log('No Git-prunable worktrees found.');
-      } else {
-        console.log(`Would prune ${prunable.length} worktree entr${prunable.length === 1 ? 'y' : 'ies'}:`);
-        for (const item of managed) {
-          console.log(`  Slot ${item.slot}: ${item.allocation.worktreePath}`);
-          console.log(`    Reason: ${item.reason}`);
-          console.log(`    Database: ${item.allocation.dbName}${options.keepDb ? ' (kept)' : ' (dropped)'}`);
-          if (item.allocation.redisContainerName) {
-            console.log(`    Redis: ${item.allocation.redisContainerName} (removed)`);
-          }
+        console.log(formatJson(success(payload)));
+        return;
+      }
+      if (nothingToDo) {
+        console.log('Nothing to prune.');
+        return;
+      }
+      const totalActions = managed.length + unmanaged.length + orphanContainers.length;
+      console.log(`Would prune ${totalActions} item${totalActions === 1 ? '' : 's'}:`);
+      for (const item of managed) {
+        console.log(`  Slot ${item.slot}: ${item.allocation.worktreePath}`);
+        console.log(`    Reason: ${item.reason}`);
+        console.log(`    Database: ${item.allocation.dbName}${options.keepDb ? ' (kept)' : ' (dropped)'}`);
+        if (item.allocation.redisContainerName) {
+          console.log(`    Redis: ${item.allocation.redisContainerName} (removed)`);
         }
-        for (const item of unmanaged) {
-          console.log(`  Unmanaged: ${item.worktreePath}`);
-          console.log(`    Reason: ${item.reason}`);
+      }
+      for (const item of unmanaged) {
+        console.log(`  Unmanaged: ${item.worktreePath}`);
+        console.log(`    Reason: ${item.reason}`);
+      }
+      for (const orphan of orphanContainers) {
+        console.log(`  Orphan Redis: ${orphan.containerName} (slot ${orphan.slot})`);
+        if (orphan.branch) {
+          console.log(`    Branch: ${orphan.branch}`);
+        }
+        if (orphan.worktreePath) {
+          console.log(`    Worktree: ${orphan.worktreePath}`);
         }
       }
       return;
     }
 
-    if (prunable.length === 0) {
+    if (nothingToDo) {
+      const empty = {
+        prunedManaged: [],
+        prunedUnmanaged: [],
+        prunedOrphanContainers: [],
+        failed: [],
+      };
       if (options.json) {
-        console.log(formatJson(success({
-          prunedManaged: [],
-          prunedUnmanaged: [],
-          failed: [],
-        })));
+        console.log(formatJson(success(empty)));
       } else {
-        console.log('No Git-prunable worktrees found.');
+        console.log('Nothing to prune.');
       }
       return;
     }
 
-    const config = !options.keepDb && managed.length > 0 ? loadConfig(mainRoot) : null;
-    const dbContext = options.keepDb || managed.length === 0 || config === null
+    const dbContext = options.keepDb || managed.length === 0
       ? null
       : {
         databaseUrl: readDatabaseUrl(mainRoot),
@@ -133,6 +203,7 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
       };
 
     const prunedManaged: PrunedManagedWorktree[] = [];
+    const prunedOrphans: PrunedOrphanContainer[] = [];
     const failed: PruneFailure[] = [];
 
     for (const item of managed) {
@@ -160,10 +231,31 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
           dbDropped: dbContext !== null,
           redisContainerRemoved,
           reason: item.reason,
+          reasonSource: item.reasonSource,
         });
       } catch (err) {
-        const message = extractErrorMessage(err);
-        failed.push({ worktreePath: item.allocation.worktreePath, message });
+        failed.push({
+          worktreePath: item.allocation.worktreePath,
+          message: extractErrorMessage(err),
+        });
+      }
+    }
+
+    for (const orphan of orphanContainers) {
+      try {
+        const removed = removeManagedRedisContainer(mainRoot, orphan.slot, log);
+        prunedOrphans.push({
+          slot: orphan.slot,
+          containerName: orphan.containerName,
+          branch: orphan.branch,
+          worktreePath: orphan.worktreePath,
+          removed,
+        });
+      } catch (err) {
+        failed.push({
+          worktreePath: orphan.containerName,
+          message: extractErrorMessage(err),
+        });
       }
     }
 
@@ -171,11 +263,14 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
       writeRegistry(mainRoot, registry);
     }
 
-    pruneWorktrees((command) => log(`Running: ${command}`));
+    if (gitPrunable.length > 0) {
+      pruneWorktrees((command) => log(`Running: ${command}`));
+    }
 
     const payload = {
       prunedManaged,
       prunedUnmanaged: unmanaged,
+      prunedOrphanContainers: prunedOrphans,
       failed,
     };
 
@@ -189,15 +284,19 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
             data: payload,
             error: {
               code: 'PRUNE_PARTIAL',
-              message: `Failed to clean up ${failed.length} managed worktree entr${failed.length === 1 ? 'y' : 'ies'}.`,
+              message: `Failed to clean up ${failed.length} target${failed.length === 1 ? '' : 's'}.`,
             },
           }),
         );
       }
+      if (failed.length > 0) {
+        process.exitCode = 1;
+      }
       return;
     }
 
-    console.log(`Pruned ${prunable.length} Git worktree entr${prunable.length === 1 ? 'y' : 'ies'}.`);
+    const totalPruned = prunedManaged.length + unmanaged.length + prunedOrphans.length;
+    console.log(`Pruned ${totalPruned} item${totalPruned === 1 ? '' : 's'}.`);
     for (const item of prunedManaged) {
       console.log(`  Slot ${item.slot}: ${item.worktreePath}`);
       console.log(`    Reason: ${item.reason}`);
@@ -208,8 +307,17 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
       console.log(`  Unmanaged: ${item.worktreePath}`);
       console.log(`    Reason: ${item.reason}`);
     }
+    for (const orphan of prunedOrphans) {
+      console.log(`  Orphan Redis: ${orphan.containerName} (slot ${orphan.slot}) ${orphan.removed ? '(removed)' : '(not found)'}`);
+      if (orphan.branch) {
+        console.log(`    Branch: ${orphan.branch}`);
+      }
+      if (orphan.worktreePath) {
+        console.log(`    Worktree: ${orphan.worktreePath}`);
+      }
+    }
     if (failed.length > 0) {
-      console.error(`Failed to clean up ${failed.length} managed worktree entr${failed.length === 1 ? 'y' : 'ies'}:`);
+      console.error(`Failed to clean up ${failed.length} target${failed.length === 1 ? '' : 's'}:`);
       for (const item of failed) {
         console.error(`  ${item.worktreePath}: ${item.message}`);
       }

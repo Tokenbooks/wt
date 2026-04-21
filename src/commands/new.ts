@@ -7,17 +7,19 @@ import {
   findUnavailableServicePorts,
 } from '../core/slot-allocator';
 import { copyAndPatchAllEnvFiles } from '../core/env-patcher';
-import { createDatabase, databaseExists } from '../core/database';
+import { createDatabase, databaseExists, dropDatabase } from '../core/database';
 import {
   ensureManagedRedisContainer,
   getAllocationServices,
   readManagedRedisSourceUrl,
+  removeManagedRedisContainer,
   usesManagedRedis,
 } from '../core/managed-redis';
 import {
   getMainWorktreePath,
   createWorktree,
   getBranchName,
+  removeWorktree,
   resolveWorktreeBranch,
   type WorktreeBranchSelection,
 } from '../core/git';
@@ -101,7 +103,6 @@ export async function createNewWorktree(
 
   log(`Creating worktree for '${branchName}' in slot ${slot}...`);
 
-  // Create worktree
   const basePath = path.join(mainRoot, config.baseWorktreePath);
   const branchSelection = resolveWorktreeBranch(
     branchName,
@@ -111,66 +112,117 @@ export async function createNewWorktree(
     warn(`Failed to check origin for '${branchName}': ${branchSelection.originCheckError}`);
   }
   log(describeBranchSelection(branchSelection));
-  const worktreePath = createWorktree(
-    basePath,
-    branchSelection,
-    (command) => log(`Running: ${command}`),
-  );
-  const actualBranch = getBranchName(worktreePath);
 
-  // Compute isolation params
   const dbName = calculateDbName(slot, config.baseDatabaseName);
   const ports = calculatePorts(slot, services, config.portStride);
-  const redisSourceUrl = usesManagedRedis(config)
-    ? readManagedRedisSourceUrl(mainRoot, config)
-    : null;
-  const redisContainerName = usesManagedRedis(config)
-    ? ensureManagedRedisContainer({
-      mainRoot,
-      slot,
-      branchName: actualBranch,
-      worktreePath,
-      port: ports.redis!,
-      sourceUrl: redisSourceUrl,
-      log,
-    })
-    : undefined;
-
-  // Create database
   const databaseUrl = readDatabaseUrl(mainRoot);
-  const dbAlreadyExists = await databaseExists(databaseUrl, dbName);
-  if (!dbAlreadyExists) {
-    log(`Creating database '${dbName}'...`);
-    await createDatabase(
-      databaseUrl,
-      config.baseDatabaseName,
-      dbName,
-      (statement) => log(`Running SQL: ${statement}`),
+  const managedRedis = usesManagedRedis(config);
+
+  // Track what each step has created so we can roll back on failure. Resource
+  // leaks from partially-successful `wt new` runs were the main source of
+  // orphan Redis containers in practice — everything allocated here must be
+  // torn down if we fail before writing the registry.
+  let worktreeCreated = false;
+  let redisContainerCreated = false;
+  let databaseCreated = false;
+  let worktreePath: string;
+  let actualBranch: string;
+  let allocation: Allocation;
+  let redisContainerName: string | undefined;
+
+  try {
+    worktreePath = createWorktree(
+      basePath,
+      branchSelection,
+      (command) => log(`Running: ${command}`),
     );
-  } else {
-    log(`Database '${dbName}' already exists, reusing.`);
+    worktreeCreated = true;
+    actualBranch = getBranchName(worktreePath);
+
+    if (managedRedis) {
+      const redisSourceUrl = readManagedRedisSourceUrl(mainRoot, config);
+      redisContainerName = ensureManagedRedisContainer({
+        mainRoot,
+        slot,
+        branchName: actualBranch,
+        worktreePath,
+        port: ports.redis!,
+        sourceUrl: redisSourceUrl,
+        log,
+      });
+      redisContainerCreated = true;
+    }
+
+    const dbAlreadyExists = await databaseExists(databaseUrl, dbName);
+    if (!dbAlreadyExists) {
+      log(`Creating database '${dbName}'...`);
+      await createDatabase(
+        databaseUrl,
+        config.baseDatabaseName,
+        dbName,
+        (statement) => log(`Running SQL: ${statement}`),
+      );
+      databaseCreated = true;
+    } else {
+      log(`Database '${dbName}' already exists, reusing.`);
+    }
+
+    log(`Patching ${config.envFiles.length} env file(s)...`);
+    copyAndPatchAllEnvFiles(config, mainRoot, worktreePath, {
+      dbName,
+      redisPort: ports.redis,
+      ports,
+      branchName: actualBranch,
+    });
+
+    allocation = {
+      worktreePath,
+      branchName: actualBranch,
+      dbName,
+      redisContainerName,
+      ports,
+      createdAt: new Date().toISOString(),
+    };
+    registry = addAllocation(registry, slot, allocation);
+    writeRegistry(mainRoot, registry);
+  } catch (err) {
+    const reason = extractErrorMessage(err);
+    warn(`Failed to create worktree for '${branchName}' in slot ${slot}: ${reason}`);
+    warn('Rolling back partial setup...');
+
+    if (databaseCreated) {
+      try {
+        await dropDatabase(
+          databaseUrl,
+          dbName,
+          config.baseDatabaseName,
+          (statement) => log(`Rollback SQL: ${statement}`),
+        );
+        log(`Rollback: dropped database '${dbName}'.`);
+      } catch (rollbackErr) {
+        warn(`Rollback failed to drop database '${dbName}': ${extractErrorMessage(rollbackErr)}`);
+      }
+    }
+
+    if (redisContainerCreated) {
+      try {
+        removeManagedRedisContainer(mainRoot, slot, log);
+      } catch (rollbackErr) {
+        warn(`Rollback failed to remove Redis container for slot ${slot}: ${extractErrorMessage(rollbackErr)}`);
+      }
+    }
+
+    if (worktreeCreated && worktreePath! && fs.existsSync(worktreePath!)) {
+      try {
+        removeWorktree(worktreePath!, (command) => log(`Rollback: ${command}`));
+        log(`Rollback: removed worktree at ${worktreePath!}.`);
+      } catch (rollbackErr) {
+        warn(`Rollback failed to remove worktree at ${worktreePath!}: ${extractErrorMessage(rollbackErr)}`);
+      }
+    }
+
+    throw err;
   }
-
-  // Copy and patch env files
-  log(`Patching ${config.envFiles.length} env file(s)...`);
-  copyAndPatchAllEnvFiles(config, mainRoot, worktreePath, {
-    dbName,
-    redisPort: ports.redis,
-    ports,
-    branchName: actualBranch,
-  });
-
-  // Update registry
-  const allocation: Allocation = {
-    worktreePath,
-    branchName: actualBranch,
-    dbName,
-    redisContainerName,
-    ports,
-    createdAt: new Date().toISOString(),
-  };
-  registry = addAllocation(registry, slot, allocation);
-  writeRegistry(mainRoot, registry);
 
   // Run post-setup commands
   if (config.autoInstall && options.install && config.postSetup.length > 0) {

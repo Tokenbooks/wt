@@ -37,6 +37,13 @@ interface DockerInspectRecord {
   };
 }
 
+export interface ManagedRedisContainerSummary {
+  readonly containerName: string;
+  readonly slot: number;
+  readonly branch?: string;
+  readonly worktreePath?: string;
+}
+
 function slugify(input: string): string {
   return input
     .toLowerCase()
@@ -283,4 +290,61 @@ export function removeManagedRedisContainer(
   runDocker(['rm', '-f', containerName]);
   log?.(`Removed Redis container '${containerName}'.`);
   return true;
+}
+
+/**
+ * List all wt-managed Redis containers labeled as belonging to the given repo root.
+ * Returns an empty array if Docker is unavailable or the daemon isn't running —
+ * prune should tolerate environments without Docker.
+ */
+export function listManagedRedisContainersForRepo(
+  mainRoot: string,
+): ManagedRedisContainerSummary[] {
+  let output: string;
+  try {
+    output = runDocker([
+      'ps',
+      '-a',
+      '--filter',
+      `label=${DOCKER_LABEL_PREFIX}.repo-root=${mainRoot}`,
+      '--filter',
+      `label=${DOCKER_LABEL_PREFIX}.managed=true`,
+      '--format',
+      '{{.Names}}',
+    ]);
+  } catch (err) {
+    if (err instanceof Error && /Docker CLI not found|Cannot connect to the Docker daemon/i.test(err.message)) {
+      return [];
+    }
+    throw err;
+  }
+
+  if (!output) {
+    return [];
+  }
+
+  const names = output.split('\n').map((line) => line.trim()).filter((line) => line.length > 0);
+  const summaries: ManagedRedisContainerSummary[] = [];
+  for (const name of names) {
+    const inspect = inspectManagedRedisContainer(name);
+    if (!inspect) {
+      continue;
+    }
+    const labels = inspect.Config?.Labels ?? {};
+    const slotLabel = labels[`${DOCKER_LABEL_PREFIX}.slot`];
+    if (!slotLabel) {
+      continue;
+    }
+    const slot = Number.parseInt(slotLabel, 10);
+    if (!Number.isSafeInteger(slot)) {
+      continue;
+    }
+    summaries.push({
+      containerName: name,
+      slot,
+      branch: labels[`${DOCKER_LABEL_PREFIX}.branch`],
+      worktreePath: labels[`${DOCKER_LABEL_PREFIX}.worktree`],
+    });
+  }
+  return summaries;
 }
