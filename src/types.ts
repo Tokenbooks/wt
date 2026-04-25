@@ -4,6 +4,7 @@ import type {
   serviceSchema,
   envFileSchema,
   patchSchema,
+  dockerServiceSchema,
 } from './schemas/config.schema';
 import type {
   registrySchema,
@@ -15,6 +16,7 @@ export type WtConfig = z.infer<typeof configSchema>;
 export type ServiceConfig = z.infer<typeof serviceSchema>;
 export type EnvFileConfig = z.infer<typeof envFileSchema>;
 export type PatchConfig = z.infer<typeof patchSchema>;
+export type DockerServiceConfig = z.infer<typeof dockerServiceSchema>;
 
 /** Registry persisted at .worktree-registry.json */
 export type Registry = z.infer<typeof registrySchema>;
@@ -23,7 +25,6 @@ export type Allocation = z.infer<typeof allocationSchema>;
 /** Context passed to env patcher with computed values for a slot */
 export interface PatchContext {
   readonly dbName: string;
-  readonly redisPort?: number;
   readonly ports: Record<string, number>;
   readonly branchName?: string;
 }

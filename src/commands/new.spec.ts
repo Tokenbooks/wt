@@ -26,12 +26,9 @@ jest.mock('../core/database', () => ({
   dropDatabase: jest.fn(),
 }));
 
-jest.mock('../core/managed-redis', () => ({
-  ensureManagedRedisContainer: jest.fn(),
-  getAllocationServices: jest.fn(),
-  readManagedRedisSourceUrl: jest.fn(),
-  removeManagedRedisContainer: jest.fn(),
-  usesManagedRedis: jest.fn(),
+jest.mock('../core/docker-services', () => ({
+  ensureDockerServices: jest.fn(),
+  removeDockerServices: jest.fn(),
 }));
 
 jest.mock('../core/git', () => ({
@@ -59,12 +56,9 @@ import {
 import { copyAndPatchAllEnvFiles } from '../core/env-patcher';
 import { createDatabase, databaseExists, dropDatabase } from '../core/database';
 import {
-  ensureManagedRedisContainer,
-  getAllocationServices,
-  readManagedRedisSourceUrl,
-  removeManagedRedisContainer,
-  usesManagedRedis,
-} from '../core/managed-redis';
+  ensureDockerServices,
+  removeDockerServices,
+} from '../core/docker-services';
 import {
   getMainWorktreePath,
   createWorktree,
@@ -90,17 +84,11 @@ const mockCopyAndPatchAllEnvFiles =
 const mockCreateDatabase = createDatabase as jest.MockedFunction<typeof createDatabase>;
 const mockDatabaseExists = databaseExists as jest.MockedFunction<typeof databaseExists>;
 const mockDropDatabase = dropDatabase as jest.MockedFunction<typeof dropDatabase>;
-const mockGetAllocationServices =
-  getAllocationServices as jest.MockedFunction<typeof getAllocationServices>;
-const mockUsesManagedRedis = usesManagedRedis as jest.MockedFunction<typeof usesManagedRedis>;
-const mockEnsureManagedRedisContainer = ensureManagedRedisContainer as jest.MockedFunction<
-  typeof ensureManagedRedisContainer
+const mockEnsureDockerServices = ensureDockerServices as jest.MockedFunction<
+  typeof ensureDockerServices
 >;
-const mockReadManagedRedisSourceUrl = readManagedRedisSourceUrl as jest.MockedFunction<
-  typeof readManagedRedisSourceUrl
->;
-const mockRemoveManagedRedisContainer = removeManagedRedisContainer as jest.MockedFunction<
-  typeof removeManagedRedisContainer
+const mockRemoveDockerServices = removeDockerServices as jest.MockedFunction<
+  typeof removeDockerServices
 >;
 const mockGetMainWorktreePath = getMainWorktreePath as jest.MockedFunction<typeof getMainWorktreePath>;
 const mockCreateWorktree = createWorktree as jest.MockedFunction<typeof createWorktree>;
@@ -123,6 +111,7 @@ describe('new command branch selection', () => {
     services: [
       { name: 'web', defaultPort: 3000 },
     ],
+    dockerServices: [],
     envFiles: [],
     postSetup: [],
     autoInstall: true,
@@ -153,8 +142,6 @@ describe('new command branch selection', () => {
     mockFindAvailablePortSafeSlot.mockResolvedValue(2);
     mockCalculatePorts.mockReturnValue({ web: 3200 });
     mockCalculateDbName.mockReturnValue('myapp_wt2');
-    mockGetAllocationServices.mockReturnValue(config.services);
-    mockUsesManagedRedis.mockReturnValue(false);
     mockDatabaseExists.mockResolvedValue(false);
     mockCreateDatabase.mockResolvedValue();
     mockCreateWorktree.mockReturnValue(allocation.worktreePath);
@@ -256,7 +243,7 @@ describe('new command rollback on failure', () => {
   let worktreeDir: string;
   let stderrSpy: jest.SpiedFunction<typeof process.stderr.write>;
 
-  const configWithRedis: WtConfig = {
+  const configWithDocker: WtConfig = {
     baseDatabaseName: 'myapp',
     baseWorktreePath: '.worktrees',
     portStride: 100,
@@ -268,7 +255,19 @@ describe('new command rollback on failure', () => {
     envFiles: [
       {
         source: '.env',
-        patches: [{ var: 'REDIS_URL', type: 'redis', service: 'redis' }],
+        patches: [{ var: 'REDIS_URL', type: 'url', service: 'redis' }],
+      },
+    ],
+    dockerServices: [
+      {
+        name: 'redis',
+        image: 'redis:8-alpine',
+        restart: 'unless-stopped',
+        ports: [{ service: 'redis', target: 6379, host: '127.0.0.1' }],
+        environment: {},
+        command: ['redis-server'],
+        volumes: [],
+        extraHosts: [],
       },
     ],
     postSetup: [],
@@ -292,16 +291,16 @@ describe('new command rollback on failure', () => {
     jest.spyOn(console, 'log').mockImplementation(() => {});
 
     mockGetMainWorktreePath.mockReturnValue(tmpDir);
-    mockLoadConfig.mockReturnValue(configWithRedis);
+    mockLoadConfig.mockReturnValue(configWithDocker);
     mockReadRegistry.mockReturnValue({ version: 1, allocations: {} } satisfies Registry);
     mockFindAvailablePortSafeSlot.mockResolvedValue(2);
     mockCalculatePorts.mockReturnValue({ web: 3200, redis: 6579 });
     mockCalculateDbName.mockReturnValue('myapp_wt2');
-    mockGetAllocationServices.mockReturnValue(configWithRedis.services);
-    mockUsesManagedRedis.mockReturnValue(true);
-    mockReadManagedRedisSourceUrl.mockReturnValue('redis://:pw@localhost:6379/0');
-    mockEnsureManagedRedisContainer.mockReturnValue('wt-myapp-deadbeef-slot-2-redis');
-    mockRemoveManagedRedisContainer.mockReturnValue(true);
+    mockEnsureDockerServices.mockReturnValue({
+      projectName: 'wt-myapp-deadbeef-slot-2',
+      services: ['redis'],
+    });
+    mockRemoveDockerServices.mockReturnValue(true);
     mockDatabaseExists.mockResolvedValue(false);
     mockCreateDatabase.mockResolvedValue();
     mockDropDatabase.mockResolvedValue();
@@ -321,7 +320,25 @@ describe('new command rollback on failure', () => {
     jest.clearAllMocks();
   });
 
-  it('rolls back Redis, database, and worktree when env patching fails', async () => {
+  it('starts Docker after database creation', async () => {
+    await createNewWorktree('feat/auth', { install: false, quiet: true });
+
+    const createOrder = mockCreateDatabase.mock.invocationCallOrder[0];
+    const dockerOrder = mockEnsureDockerServices.mock.invocationCallOrder[0];
+    expect(createOrder).toBeLessThan(dockerOrder!);
+    expect(mockEnsureDockerServices).toHaveBeenCalledWith({
+      mainRoot: tmpDir,
+      slot: 2,
+      branchName: 'feat/auth',
+      worktreePath: worktreeDir,
+      dbName: 'myapp_wt2',
+      ports: { web: 3200, redis: 6579 },
+      config: configWithDocker,
+      log: expect.any(Function),
+    });
+  });
+
+  it('rolls back Docker, database, and worktree when env patching fails', async () => {
     const boom = new Error('env patch exploded');
     mockCopyAndPatchAllEnvFiles.mockImplementation(() => {
       throw boom;
@@ -335,7 +352,7 @@ describe('new command rollback on failure', () => {
       'myapp',
       expect.any(Function),
     );
-    expect(mockRemoveManagedRedisContainer).toHaveBeenCalledWith(tmpDir, 2, expect.any(Function));
+    expect(mockRemoveDockerServices).toHaveBeenCalledWith(tmpDir, 2, expect.any(Function));
     expect(mockRemoveWorktree).toHaveBeenCalledWith(worktreeDir, expect.any(Function));
     expect(mockWriteRegistry).not.toHaveBeenCalled();
   });
@@ -351,11 +368,11 @@ describe('new command rollback on failure', () => {
 
     // We reused an existing DB, so we must not drop it on rollback.
     expect(mockDropDatabase).not.toHaveBeenCalled();
-    expect(mockRemoveManagedRedisContainer).toHaveBeenCalledWith(tmpDir, 2, expect.any(Function));
+    expect(mockRemoveDockerServices).toHaveBeenCalledWith(tmpDir, 2, expect.any(Function));
     expect(mockRemoveWorktree).toHaveBeenCalled();
   });
 
-  it('rolls back the Redis container when createDatabase fails', async () => {
+  it('does not start Docker when createDatabase fails', async () => {
     const boom = new Error('CREATE DATABASE failed');
     mockCreateDatabase.mockRejectedValue(boom);
 
@@ -363,7 +380,8 @@ describe('new command rollback on failure', () => {
 
     // DB creation failed before completion so no drop needed.
     expect(mockDropDatabase).not.toHaveBeenCalled();
-    expect(mockRemoveManagedRedisContainer).toHaveBeenCalledWith(tmpDir, 2, expect.any(Function));
+    expect(mockEnsureDockerServices).not.toHaveBeenCalled();
+    expect(mockRemoveDockerServices).not.toHaveBeenCalled();
     expect(mockRemoveWorktree).toHaveBeenCalled();
     expect(mockWriteRegistry).not.toHaveBeenCalled();
   });
@@ -374,7 +392,7 @@ describe('new command rollback on failure', () => {
       throw originalError;
     });
     mockDropDatabase.mockRejectedValue(new Error('postgres unreachable'));
-    mockRemoveManagedRedisContainer.mockImplementation(() => {
+    mockRemoveDockerServices.mockImplementation(() => {
       throw new Error('docker daemon down');
     });
     mockRemoveWorktree.mockImplementation(() => {
@@ -390,8 +408,8 @@ describe('new command rollback on failure', () => {
     expect(stderr).toContain('git refused');
   });
 
-  it('skips Redis rollback when managed redis is disabled', async () => {
-    mockUsesManagedRedis.mockReturnValue(false);
+  it('skips Docker rollback when no docker services are configured', async () => {
+    mockLoadConfig.mockReturnValue({ ...configWithDocker, dockerServices: [] });
     const boom = new Error('env patch exploded');
     mockCopyAndPatchAllEnvFiles.mockImplementation(() => {
       throw boom;
@@ -399,8 +417,8 @@ describe('new command rollback on failure', () => {
 
     await expect(createNewWorktree('feat/auth', { install: false, quiet: true })).rejects.toBe(boom);
 
-    expect(mockEnsureManagedRedisContainer).not.toHaveBeenCalled();
-    expect(mockRemoveManagedRedisContainer).not.toHaveBeenCalled();
+    expect(mockEnsureDockerServices).toHaveBeenCalled();
+    expect(mockRemoveDockerServices).not.toHaveBeenCalled();
     expect(mockRemoveWorktree).toHaveBeenCalled();
   });
 });

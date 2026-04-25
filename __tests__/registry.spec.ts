@@ -26,7 +26,10 @@ describe('registry', () => {
     worktreePath: '/tmp/worktrees/feat-test',
     branchName: 'feat/test',
     dbName: 'cryptoacc_wt1',
-    redisContainerName: 'wt-project-12345678-slot-1-redis',
+    docker: {
+      projectName: 'wt-project-12345678-slot-1',
+      services: ['redis'],
+    },
     ports: { app: 3100, server: 3101, redis: 6479 },
     createdAt: '2026-02-17T14:30:00Z',
   };

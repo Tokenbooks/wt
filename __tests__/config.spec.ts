@@ -15,7 +15,7 @@ describe('loadConfig', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('migrates legacy redis config to an explicit redis service on first load', () => {
+  it('rejects legacy redis patch configs', () => {
     fs.writeFileSync(
       path.join(tmpDir, 'wt.config.json'),
       JSON.stringify({
@@ -31,29 +31,8 @@ describe('loadConfig', () => {
         ],
       }, null, 2),
     );
-    fs.writeFileSync(
-      path.join(tmpDir, '.env'),
-      'REDIS_URL=redis://:local_password@127.0.0.1:6380/0\n',
-    );
 
-    const config = loadConfig(tmpDir);
-
-    expect(config.services).toContainEqual({ name: 'redis', defaultPort: 6380 });
-    expect(config.envFiles[0]?.patches[0]).toEqual({
-      var: 'REDIS_URL',
-      type: 'redis',
-      service: 'redis',
-    });
-
-    const rewritten = JSON.parse(
-      fs.readFileSync(path.join(tmpDir, 'wt.config.json'), 'utf-8'),
-    ) as {
-      services: Array<{ name: string; defaultPort: number }>;
-      envFiles: Array<{ patches: Array<{ var: string; type: string; service?: string }> }>;
-    };
-
-    expect(rewritten.services).toContainEqual({ name: 'redis', defaultPort: 6380 });
-    expect(rewritten.envFiles[0]?.patches[0]?.service).toBe('redis');
+    expect(() => loadConfig(tmpDir)).toThrow();
   });
 
   it('rejects configs whose generated ports collide across slots', () => {
@@ -72,5 +51,27 @@ describe('loadConfig', () => {
     );
 
     expect(() => loadConfig(tmpDir)).toThrow('collides');
+  });
+
+  it('rejects docker services that reference unknown port services', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'wt.config.json'),
+      JSON.stringify({
+        baseDatabaseName: 'myapp',
+        services: [{ name: 'web', defaultPort: 3000 }],
+        dockerServices: [
+          {
+            name: 'electric',
+            image: 'docker.io/electricsql/electric:latest',
+            ports: [{ service: 'electric', target: 3000 }],
+          },
+        ],
+        envFiles: [],
+      }, null, 2),
+    );
+
+    expect(() => loadConfig(tmpDir)).toThrow(
+      "Docker service 'electric' references unknown port service 'electric'.",
+    );
   });
 });

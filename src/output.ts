@@ -57,14 +57,14 @@ export function formatAllocationTable(
     return 'No worktree allocations found.';
   }
 
-  const header = padRow(['Slot', 'Branch', 'DB', 'Redis', 'Ports', 'Status']);
+  const header = padRow(['Slot', 'Branch', 'DB', 'Docker', 'Ports', 'Status']);
   const separator = '-'.repeat(header.length);
   const rows = entries.map(([slot, alloc]) => {
     const portStr = Object.entries(alloc.ports)
       .map(([name, port]) => `${name}:${port}`)
       .join(' ');
     const status = fs.existsSync(alloc.worktreePath) ? 'ok' : 'stale';
-    return padRow([slot, alloc.branchName, alloc.dbName, formatRedisCell(alloc), portStr, status]);
+    return padRow([slot, alloc.branchName, alloc.dbName, formatDockerCell(alloc), portStr, status]);
   });
 
   return [header, separator, ...rows].join('\n');
@@ -76,14 +76,11 @@ function padRow(cols: string[]): string {
   return cols.map((col, i) => col.padEnd(widths[i] ?? 10)).join('');
 }
 
-function formatRedisCell(alloc: Allocation): string {
-  if (alloc.redisContainerName) {
-    return alloc.ports.redis ? `port:${alloc.ports.redis}` : alloc.redisContainerName;
+function formatDockerCell(alloc: Allocation): string {
+  if (!alloc.docker) {
+    return '-';
   }
-  if (alloc.redisDb !== undefined) {
-    return `db:${alloc.redisDb}`;
-  }
-  return '-';
+  return `${alloc.docker.projectName} (${alloc.docker.services.length})`;
 }
 
 /** Print a setup summary for human output */
@@ -101,9 +98,9 @@ export function formatSetupSummary(
     `  Branch:   ${alloc.branchName}`,
     ...(options?.branchSourceLabel ? [`  Source:   ${options.branchSourceLabel}`] : []),
     `  Database: ${alloc.dbName}`,
-    alloc.redisContainerName
-      ? `  Redis:    ${alloc.redisContainerName}${alloc.ports.redis ? ` (port ${alloc.ports.redis})` : ''}`
-      : `  Redis DB: ${alloc.redisDb ?? '-'}`,
+    alloc.docker
+      ? `  Docker:   ${alloc.docker.projectName} (${alloc.docker.services.join(', ')})`
+      : '  Docker:   -',
     `  Ports:`,
     portLines,
     `  Path:     ${alloc.worktreePath}`,

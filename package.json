@@ -17,13 +17,14 @@
     "README.md"
   ],
   "scripts": {
-    "prepare": "tsc && node scripts/link-cli.js",
-    "build": "tsc && node scripts/link-cli.js",
+    "clean": "node scripts/clean.js",
+    "prepare": "node scripts/clean.js && tsc && node scripts/link-cli.js",
+    "build": "node scripts/clean.js && tsc && node scripts/link-cli.js",
     "dev": "tsc --watch",
     "test": "jest",
     "test:docker": "node scripts/test-docker.js",
     "lint": "eslint 'src/**/*.ts' '__tests__/**/*.ts'",
-    "prepack": "tsc",
+    "prepack": "node scripts/clean.js && tsc",
     "release": "node scripts/release.js",
     "release:patch": "node scripts/release.js patch",
     "release:minor": "node scripts/release.js minor",

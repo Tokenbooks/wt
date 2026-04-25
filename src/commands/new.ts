@@ -9,12 +9,9 @@ import {
 import { copyAndPatchAllEnvFiles } from '../core/env-patcher';
 import { createDatabase, databaseExists, dropDatabase } from '../core/database';
 import {
-  ensureManagedRedisContainer,
-  getAllocationServices,
-  readManagedRedisSourceUrl,
-  removeManagedRedisContainer,
-  usesManagedRedis,
-} from '../core/managed-redis';
+  ensureDockerServices,
+  removeDockerServices,
+} from '../core/docker-services';
 import {
   getMainWorktreePath,
   createWorktree,
@@ -64,7 +61,6 @@ export async function createNewWorktree(
 
   const mainRoot = getMainWorktreePath();
   const config = loadConfig(mainRoot);
-  const services = getAllocationServices(config);
   let registry = readRegistry(mainRoot);
 
   // Determine slot
@@ -77,7 +73,7 @@ export async function createNewWorktree(
     if (String(slot) in registry.allocations) {
       throw new Error(`Slot ${slot} is already occupied.`);
     }
-    const requestedPorts = calculatePorts(slot, services, config.portStride);
+    const requestedPorts = calculatePorts(slot, config.services, config.portStride);
     const unavailablePorts = await findUnavailableServicePorts(requestedPorts);
     if (unavailablePorts.length > 0) {
       const detail = unavailablePorts
@@ -89,7 +85,7 @@ export async function createNewWorktree(
     const available = await findAvailablePortSafeSlot(
       registry,
       config.maxSlots,
-      services,
+      config.services,
       config.portStride,
     );
     if (available === null) {
@@ -114,21 +110,19 @@ export async function createNewWorktree(
   log(describeBranchSelection(branchSelection));
 
   const dbName = calculateDbName(slot, config.baseDatabaseName);
-  const ports = calculatePorts(slot, services, config.portStride);
+  const ports = calculatePorts(slot, config.services, config.portStride);
   const databaseUrl = readDatabaseUrl(mainRoot);
-  const managedRedis = usesManagedRedis(config);
 
   // Track what each step has created so we can roll back on failure. Resource
-  // leaks from partially-successful `wt new` runs were the main source of
-  // orphan Redis containers in practice — everything allocated here must be
-  // torn down if we fail before writing the registry.
+  // leaks from partially-successful `wt new` runs are hard to clean up later;
+  // everything allocated here must be torn down if we fail before writing the
+  // registry.
   let worktreeCreated = false;
-  let redisContainerCreated = false;
+  let dockerStarted = false;
   let databaseCreated = false;
   let worktreePath: string;
   let actualBranch: string;
   let allocation: Allocation;
-  let redisContainerName: string | undefined;
 
   try {
     worktreePath = createWorktree(
@@ -138,20 +132,6 @@ export async function createNewWorktree(
     );
     worktreeCreated = true;
     actualBranch = getBranchName(worktreePath);
-
-    if (managedRedis) {
-      const redisSourceUrl = readManagedRedisSourceUrl(mainRoot, config);
-      redisContainerName = ensureManagedRedisContainer({
-        mainRoot,
-        slot,
-        branchName: actualBranch,
-        worktreePath,
-        port: ports.redis!,
-        sourceUrl: redisSourceUrl,
-        log,
-      });
-      redisContainerCreated = true;
-    }
 
     const dbAlreadyExists = await databaseExists(databaseUrl, dbName);
     if (!dbAlreadyExists) {
@@ -167,10 +147,21 @@ export async function createNewWorktree(
       log(`Database '${dbName}' already exists, reusing.`);
     }
 
+    dockerStarted = config.dockerServices.length > 0;
+    const docker = ensureDockerServices({
+      mainRoot,
+      slot,
+      branchName: actualBranch,
+      worktreePath,
+      dbName,
+      ports,
+      config,
+      log,
+    });
+
     log(`Patching ${config.envFiles.length} env file(s)...`);
     copyAndPatchAllEnvFiles(config, mainRoot, worktreePath, {
       dbName,
-      redisPort: ports.redis,
       ports,
       branchName: actualBranch,
     });
@@ -179,7 +170,7 @@ export async function createNewWorktree(
       worktreePath,
       branchName: actualBranch,
       dbName,
-      redisContainerName,
+      docker,
       ports,
       createdAt: new Date().toISOString(),
     };
@@ -189,6 +180,14 @@ export async function createNewWorktree(
     const reason = extractErrorMessage(err);
     warn(`Failed to create worktree for '${branchName}' in slot ${slot}: ${reason}`);
     warn('Rolling back partial setup...');
+
+    if (dockerStarted) {
+      try {
+        removeDockerServices(mainRoot, slot, log);
+      } catch (rollbackErr) {
+        warn(`Rollback failed to remove Docker services for slot ${slot}: ${extractErrorMessage(rollbackErr)}`);
+      }
+    }
 
     if (databaseCreated) {
       try {
@@ -201,14 +200,6 @@ export async function createNewWorktree(
         log(`Rollback: dropped database '${dbName}'.`);
       } catch (rollbackErr) {
         warn(`Rollback failed to drop database '${dbName}': ${extractErrorMessage(rollbackErr)}`);
-      }
-    }
-
-    if (redisContainerCreated) {
-      try {
-        removeManagedRedisContainer(mainRoot, slot, log);
-      } catch (rollbackErr) {
-        warn(`Rollback failed to remove Redis container for slot ${slot}: ${extractErrorMessage(rollbackErr)}`);
       }
     }
 

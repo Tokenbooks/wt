@@ -8,11 +8,11 @@ import {
   pruneWorktrees,
 } from '../core/git';
 import {
-  listManagedRedisContainersForRepo,
-  removeManagedRedisContainer,
-  usesManagedRedis,
-  type ManagedRedisContainerSummary,
-} from '../core/managed-redis';
+  listManagedDockerProjectsForRepo,
+  removeDockerServices,
+  usesDockerServices,
+  type ManagedDockerProjectSummary,
+} from '../core/docker-services';
 import { loadConfig } from './setup';
 import { extractErrorMessage, formatJson, success, error } from '../output';
 import type { Allocation } from '../types';
@@ -37,7 +37,7 @@ interface PrunedManagedWorktree {
   readonly worktreePath: string;
   readonly dbName: string;
   readonly dbDropped: boolean;
-  readonly redisContainerRemoved: boolean;
+  readonly dockerRemoved: boolean;
   readonly reason: string;
   readonly reasonSource: PrunableReasonSource;
 }
@@ -47,11 +47,13 @@ interface PrunedUnmanagedWorktree {
   readonly reason: string;
 }
 
-interface PrunedOrphanContainer {
+interface PrunedOrphanDockerProject {
   readonly slot: number;
-  readonly containerName: string;
+  readonly projectName: string;
   readonly branch?: string;
   readonly worktreePath?: string;
+  readonly services: string[];
+  readonly containerNames: string[];
   readonly removed: boolean;
 }
 
@@ -78,7 +80,7 @@ function readDatabaseUrl(mainRoot: string): string {
  * 1. Git-prunable worktrees (disk entry missing but Git still tracks it).
  * 2. Registry allocations whose worktreePath no longer exists on disk — these
  *    can survive step 1 when Git itself has already been pruned.
- * 3. Managed Redis containers labeled for this repo whose slot is no longer
+ * 3. Managed Docker projects labeled for this repo whose slot is no longer
  *    in the registry — leftovers from partially-failed `wt new` runs or from
  *    worktrees cleaned up by something other than `wt remove`.
  */
@@ -132,19 +134,18 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
     const activeSlots = new Set(
       Object.keys(registry.allocations).map((slotStr) => Number(slotStr)),
     );
-    const orphanContainers: ManagedRedisContainerSummary[] = usesManagedRedis(config)
-      ? listManagedRedisContainersForRepo(mainRoot).filter((c) => !activeSlots.has(c.slot))
-      : [];
+    const orphanDockerProjects: ManagedDockerProjectSummary[] = listManagedDockerProjectsForRepo(mainRoot)
+      .filter((project) => !activeSlots.has(project.slot));
 
     const nothingToDo =
-      managed.length === 0 && unmanaged.length === 0 && orphanContainers.length === 0;
+      managed.length === 0 && unmanaged.length === 0 && orphanDockerProjects.length === 0;
 
     if (options.dryRun) {
       const payload = {
         prunableCount: gitPrunable.length,
         managed,
         unmanaged,
-        orphanContainers,
+        orphanDockerProjects,
       };
       if (options.json) {
         console.log(formatJson(success(payload)));
@@ -154,27 +155,30 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
         console.log('Nothing to prune.');
         return;
       }
-      const totalActions = managed.length + unmanaged.length + orphanContainers.length;
+      const totalActions = managed.length + unmanaged.length + orphanDockerProjects.length;
       console.log(`Would prune ${totalActions} item${totalActions === 1 ? '' : 's'}:`);
       for (const item of managed) {
         console.log(`  Slot ${item.slot}: ${item.allocation.worktreePath}`);
         console.log(`    Reason: ${item.reason}`);
         console.log(`    Database: ${item.allocation.dbName}${options.keepDb ? ' (kept)' : ' (dropped)'}`);
-        if (item.allocation.redisContainerName) {
-          console.log(`    Redis: ${item.allocation.redisContainerName} (removed)`);
+        if (item.allocation.docker) {
+          console.log(`    Docker: ${item.allocation.docker.projectName} (removed)`);
         }
       }
       for (const item of unmanaged) {
         console.log(`  Unmanaged: ${item.worktreePath}`);
         console.log(`    Reason: ${item.reason}`);
       }
-      for (const orphan of orphanContainers) {
-        console.log(`  Orphan Redis: ${orphan.containerName} (slot ${orphan.slot})`);
+      for (const orphan of orphanDockerProjects) {
+        console.log(`  Orphan Docker: ${orphan.projectName} (slot ${orphan.slot})`);
         if (orphan.branch) {
           console.log(`    Branch: ${orphan.branch}`);
         }
         if (orphan.worktreePath) {
           console.log(`    Worktree: ${orphan.worktreePath}`);
+        }
+        if (orphan.services.length > 0) {
+          console.log(`    Services: ${orphan.services.join(', ')}`);
         }
       }
       return;
@@ -184,7 +188,7 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
       const empty = {
         prunedManaged: [],
         prunedUnmanaged: [],
-        prunedOrphanContainers: [],
+        prunedOrphanDockerProjects: [],
         failed: [],
       };
       if (options.json) {
@@ -203,7 +207,7 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
       };
 
     const prunedManaged: PrunedManagedWorktree[] = [];
-    const prunedOrphans: PrunedOrphanContainer[] = [];
+    const prunedOrphans: PrunedOrphanDockerProject[] = [];
     const failed: PruneFailure[] = [];
 
     for (const item of managed) {
@@ -219,8 +223,8 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
           log(`Skipping database drop for '${item.allocation.dbName}' (${options.keepDb ? '--keep-db' : 'no config'}).`);
         }
 
-        const redisContainerRemoved = item.allocation.redisContainerName !== undefined
-          ? removeManagedRedisContainer(mainRoot, item.slot, log)
+        const dockerRemoved = item.allocation.docker !== undefined || usesDockerServices(config)
+          ? removeDockerServices(mainRoot, item.slot, log)
           : false;
 
         registry = removeAllocation(registry, item.slot);
@@ -229,7 +233,7 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
           worktreePath: item.allocation.worktreePath,
           dbName: item.allocation.dbName,
           dbDropped: dbContext !== null,
-          redisContainerRemoved,
+          dockerRemoved,
           reason: item.reason,
           reasonSource: item.reasonSource,
         });
@@ -241,19 +245,21 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
       }
     }
 
-    for (const orphan of orphanContainers) {
+    for (const orphan of orphanDockerProjects) {
       try {
-        const removed = removeManagedRedisContainer(mainRoot, orphan.slot, log);
+        const removed = removeDockerServices(mainRoot, orphan.slot, log);
         prunedOrphans.push({
           slot: orphan.slot,
-          containerName: orphan.containerName,
+          projectName: orphan.projectName,
           branch: orphan.branch,
           worktreePath: orphan.worktreePath,
+          services: orphan.services,
+          containerNames: orphan.containerNames,
           removed,
         });
       } catch (err) {
         failed.push({
-          worktreePath: orphan.containerName,
+          worktreePath: orphan.projectName,
           message: extractErrorMessage(err),
         });
       }
@@ -270,7 +276,7 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
     const payload = {
       prunedManaged,
       prunedUnmanaged: unmanaged,
-      prunedOrphanContainers: prunedOrphans,
+      prunedOrphanDockerProjects: prunedOrphans,
       failed,
     };
 
@@ -301,19 +307,22 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
       console.log(`  Slot ${item.slot}: ${item.worktreePath}`);
       console.log(`    Reason: ${item.reason}`);
       console.log(`    Database: ${item.dbName} ${item.dbDropped ? '(dropped)' : '(kept)'}`);
-      console.log(`    Redis: ${item.redisContainerRemoved ? '(removed)' : '(not found)'}`);
+      console.log(`    Docker: ${item.dockerRemoved ? '(removed)' : '(not found)'}`);
     }
     for (const item of unmanaged) {
       console.log(`  Unmanaged: ${item.worktreePath}`);
       console.log(`    Reason: ${item.reason}`);
     }
     for (const orphan of prunedOrphans) {
-      console.log(`  Orphan Redis: ${orphan.containerName} (slot ${orphan.slot}) ${orphan.removed ? '(removed)' : '(not found)'}`);
+      console.log(`  Orphan Docker: ${orphan.projectName} (slot ${orphan.slot}) ${orphan.removed ? '(removed)' : '(not found)'}`);
       if (orphan.branch) {
         console.log(`    Branch: ${orphan.branch}`);
       }
       if (orphan.worktreePath) {
         console.log(`    Worktree: ${orphan.worktreePath}`);
+      }
+      if (orphan.services.length > 0) {
+        console.log(`    Services: ${orphan.services.join(', ')}`);
       }
     }
     if (failed.length > 0) {
