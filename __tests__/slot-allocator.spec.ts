@@ -192,9 +192,32 @@ describe('slot-allocator', () => {
     }
 
     it('returns natural ports with no drift when everything is free', async () => {
-      const result = await allocateServicePorts(2, services, stride, emptyRegistry());
+      // Use OS-assigned ephemeral ports so this test doesn't flake on
+      // machines where the hard-coded 3200/4200 happen to be in use.
+      const probeA = net.createServer();
+      const probeB = net.createServer();
+      await new Promise<void>((resolve) => probeA.listen(0, '127.0.0.1', () => resolve()));
+      await new Promise<void>((resolve) => probeB.listen(0, '127.0.0.1', () => resolve()));
+      const addrA = probeA.address();
+      const addrB = probeB.address();
+      if (!addrA || typeof addrA === 'string' || !addrB || typeof addrB === 'string') {
+        throw new Error('Expected TCP addresses.');
+      }
+      const portA = addrA.port;
+      const portB = addrB.port;
+      await new Promise<void>((resolve, reject) => probeA.close((err) => (err ? reject(err) : resolve())));
+      await new Promise<void>((resolve, reject) => probeB.close((err) => (err ? reject(err) : resolve())));
 
-      expect(result.ports).toEqual({ web: 3200, api: 4200 });
+      const slot = 2;
+      const localStride = 100;
+      const localServices = [
+        { name: 'web', defaultPort: portA - slot * localStride },
+        { name: 'api', defaultPort: portB - slot * localStride },
+      ] as const;
+
+      const result = await allocateServicePorts(slot, localServices, localStride, emptyRegistry());
+
+      expect(result.ports).toEqual({ web: portA, api: portB });
       expect(result.drifts).toEqual([]);
     });
 

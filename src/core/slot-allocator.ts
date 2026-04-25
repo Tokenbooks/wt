@@ -157,6 +157,8 @@ export async function allocateServicePorts(
         service: service.name,
         requested: natural,
         assigned: candidate,
+        // Non-null: any drift implies at least one blocking iteration
+        // above, which always sets `conflict` on first occurrence.
         conflict: conflict!,
       });
     }
