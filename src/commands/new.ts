@@ -108,7 +108,7 @@ export async function createNewWorktree(
       drift.conflict.kind === 'os'
         ? `in use by ${drift.conflict.description}`
         : `reserved by slot ${drift.conflict.slot} (${drift.conflict.service})`;
-    warn(
+    log(
       `Port ${drift.requested} (${drift.service}) ${detail}; ` +
       `using ${drift.assigned} instead.`,
     );

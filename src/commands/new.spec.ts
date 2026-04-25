@@ -236,7 +236,49 @@ describe('new command branch selection', () => {
     expect(consoleLogSpy.mock.calls[0]?.[0]).toContain('Source:   origin/feat/auth');
   });
 
-  it('logs drift lines to stderr and includes portDrifts in JSON output', async () => {
+  it('logs drift lines to stderr in human mode', async () => {
+    mockResolveWorktreeBranch.mockReturnValue(originSelection());
+    mockAllocateServicePorts.mockResolvedValue({
+      ports: { web: 3201 },
+      drifts: [
+        {
+          service: 'web',
+          requested: 3200,
+          assigned: 3201,
+          conflict: { kind: 'os', description: 'node[12345]' },
+        },
+      ],
+    });
+
+    await newCommand('feat/auth', { json: false, install: false });
+
+    expect(stderrOutput(stderrSpy)).toContain(
+      'Port 3200 (web) in use by node[12345]; using 3201 instead.',
+    );
+  });
+
+  it('formats internal-conflict drift lines correctly', async () => {
+    mockResolveWorktreeBranch.mockReturnValue(originSelection());
+    mockAllocateServicePorts.mockResolvedValue({
+      ports: { web: 3201 },
+      drifts: [
+        {
+          service: 'web',
+          requested: 3200,
+          assigned: 3201,
+          conflict: { kind: 'internal', slot: 1, service: 'web' },
+        },
+      ],
+    });
+
+    await newCommand('feat/auth', { json: false, install: false });
+
+    expect(stderrOutput(stderrSpy)).toContain(
+      'Port 3200 (web) reserved by slot 1 (web); using 3201 instead.',
+    );
+  });
+
+  it('suppresses drift stderr lines in JSON mode but includes portDrifts in payload', async () => {
     mockResolveWorktreeBranch.mockReturnValue(originSelection());
     mockAllocateServicePorts.mockResolvedValue({
       ports: { web: 3201 },
@@ -252,9 +294,7 @@ describe('new command branch selection', () => {
 
     await newCommand('feat/auth', { json: true, install: false });
 
-    expect(stderrOutput(stderrSpy)).toContain(
-      'Port 3200 (web) in use by node[12345]; using 3201 instead.',
-    );
+    expect(stderrOutput(stderrSpy)).not.toContain('Port 3200');
     const output = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] ?? 'null') as {
       success: boolean;
       data: { portDrifts: unknown[] };
@@ -268,6 +308,30 @@ describe('new command branch selection', () => {
         conflict: { kind: 'os', description: 'node[12345]' },
       },
     ]);
+  });
+
+  it('uses the explicit slot when --slot is provided and goes through allocateServicePorts', async () => {
+    mockResolveWorktreeBranch.mockReturnValue(originSelection());
+    mockReadRegistry.mockReturnValue({ version: 1, allocations: {} });
+    mockCalculateDbName.mockReturnValue('myapp_wt3');
+    mockAllocateServicePorts.mockResolvedValue({ ports: { web: 3300 }, drifts: [] });
+    mockAddAllocation.mockReturnValue({
+      version: 1,
+      allocations: {
+        '3': { ...allocation, dbName: 'myapp_wt3', ports: { web: 3300 } },
+      },
+    });
+
+    const result = await createNewWorktree('feat/auth', { install: false, slot: '3' });
+
+    expect(result.slot).toBe(3);
+    expect(mockFindAvailableSlot).not.toHaveBeenCalled();
+    expect(mockAllocateServicePorts).toHaveBeenCalledWith(
+      3,
+      config.services,
+      config.portStride,
+      expect.any(Object),
+    );
   });
 });
 
