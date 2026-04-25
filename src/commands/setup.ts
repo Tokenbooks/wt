@@ -4,10 +4,9 @@ import { execSync } from 'node:child_process';
 import { configSchema } from '../schemas/config.schema';
 import { readRegistry, writeRegistry, addAllocation, findByPath } from '../core/registry';
 import {
-  calculatePorts,
   calculateDbName,
-  findAvailablePortSafeSlot,
-  findUnavailableServicePorts,
+  findAvailableSlot,
+  allocateServicePorts,
   validatePortPlan,
 } from '../core/slot-allocator';
 import { copyAndPatchAllEnvFiles } from '../core/env-patcher';
@@ -17,7 +16,7 @@ import {
 } from '../core/docker-services';
 import { getMainWorktreePath, isMainWorktree, getBranchName } from '../core/git';
 import { extractErrorMessage, formatJson, formatSetupSummary, success, error } from '../output';
-import type { Allocation, WtConfig } from '../types';
+import type { Allocation, PortDrift, WtConfig } from '../types';
 
 interface SetupOptions {
   readonly json: boolean;
@@ -107,22 +106,25 @@ export async function setupCommand(
     const config = loadConfig(mainRoot);
     let registry = readRegistry(mainRoot);
 
-    // Reuse existing allocation or allocate a new slot
+    // Reuse existing allocation or allocate a new slot.
+    // For an existing allocation, reuse the registered ports verbatim so
+    // re-runs of `wt setup` don't overwrite drifted ports with formula
+    // values.
     const existing = findByPath(registry, worktreePath);
     let slot: number;
+    let ports: Record<string, number>;
+    let portDrifts: readonly PortDrift[];
+
     if (existing) {
       slot = existing[0];
+      ports = existing[1].ports;
+      portDrifts = [];
     } else {
-      const available = await findAvailablePortSafeSlot(
-        registry,
-        config.maxSlots,
-        config.services,
-        config.portStride,
-      );
+      const available = findAvailableSlot(registry, config.maxSlots);
       if (available === null) {
         const msg =
-          `All ${config.maxSlots} slots are occupied or blocked by ports already in use. ` +
-          'Remove a worktree, stop conflicting services, or increase maxSlots.';
+          `All ${config.maxSlots} slots are occupied. ` +
+          'Remove a worktree or increase maxSlots.';
         if (options.json) {
           console.log(formatJson(error('NO_SLOTS', msg)));
         } else {
@@ -132,19 +134,29 @@ export async function setupCommand(
         return;
       }
       slot = available;
+      const allocated = await allocateServicePorts(
+        slot,
+        config.services,
+        config.portStride,
+        registry,
+      );
+      ports = allocated.ports;
+      portDrifts = allocated.drifts;
+      if (!options.json) {
+        for (const drift of portDrifts) {
+          const detail =
+            drift.conflict.kind === 'os'
+              ? `in use by ${drift.conflict.description}`
+              : `reserved by slot ${drift.conflict.slot} (${drift.conflict.service})`;
+          process.stderr.write(
+            `Port ${drift.requested} (${drift.service}) ${detail}; ` +
+            `using ${drift.assigned} instead.\n`,
+          );
+        }
+      }
     }
 
     const dbName = calculateDbName(slot, config.baseDatabaseName);
-    const ports = calculatePorts(slot, config.services, config.portStride);
-    if (!existing) {
-      const unavailablePorts = await findUnavailableServicePorts(ports);
-      if (unavailablePorts.length > 0) {
-        const detail = unavailablePorts
-          .map(({ service, port }) => `${service}:${port}`)
-          .join(', ');
-        throw new Error(`Slot ${slot} has ports already in use: ${detail}`);
-      }
-    }
     const branchName = getBranchName(worktreePath);
 
     // Create database if it doesn't exist
@@ -192,7 +204,7 @@ export async function setupCommand(
     }
 
     if (options.json) {
-      console.log(formatJson(success({ slot, ...allocation })));
+      console.log(formatJson(success({ slot, ...allocation, portDrifts })));
     } else {
       console.log(formatSetupSummary(slot, allocation));
     }

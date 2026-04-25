@@ -10,10 +10,9 @@ jest.mock('../core/registry', () => ({
 }));
 
 jest.mock('../core/slot-allocator', () => ({
-  calculatePorts: jest.fn(),
   calculateDbName: jest.fn(),
-  findAvailablePortSafeSlot: jest.fn(),
-  findUnavailableServicePorts: jest.fn(),
+  findAvailableSlot: jest.fn(),
+  allocateServicePorts: jest.fn(),
 }));
 
 jest.mock('../core/env-patcher', () => ({
@@ -49,9 +48,9 @@ jest.mock('node:child_process', () => ({
 
 import { addAllocation, readRegistry, writeRegistry } from '../core/registry';
 import {
-  calculatePorts,
   calculateDbName,
-  findAvailablePortSafeSlot,
+  findAvailableSlot,
+  allocateServicePorts,
 } from '../core/slot-allocator';
 import { copyAndPatchAllEnvFiles } from '../core/env-patcher';
 import { createDatabase, databaseExists, dropDatabase } from '../core/database';
@@ -74,10 +73,10 @@ import type { WorktreeBranchSelection } from '../core/git';
 const mockReadRegistry = readRegistry as jest.MockedFunction<typeof readRegistry>;
 const mockWriteRegistry = writeRegistry as jest.MockedFunction<typeof writeRegistry>;
 const mockAddAllocation = addAllocation as jest.MockedFunction<typeof addAllocation>;
-const mockCalculatePorts = calculatePorts as jest.MockedFunction<typeof calculatePorts>;
 const mockCalculateDbName = calculateDbName as jest.MockedFunction<typeof calculateDbName>;
-const mockFindAvailablePortSafeSlot = findAvailablePortSafeSlot as jest.MockedFunction<
-  typeof findAvailablePortSafeSlot
+const mockFindAvailableSlot = findAvailableSlot as jest.MockedFunction<typeof findAvailableSlot>;
+const mockAllocateServicePorts = allocateServicePorts as jest.MockedFunction<
+  typeof allocateServicePorts
 >;
 const mockCopyAndPatchAllEnvFiles =
   copyAndPatchAllEnvFiles as jest.MockedFunction<typeof copyAndPatchAllEnvFiles>;
@@ -139,8 +138,8 @@ describe('new command branch selection', () => {
     mockGetMainWorktreePath.mockReturnValue(tmpDir);
     mockLoadConfig.mockReturnValue(config);
     mockReadRegistry.mockReturnValue({ version: 1, allocations: {} } satisfies Registry);
-    mockFindAvailablePortSafeSlot.mockResolvedValue(2);
-    mockCalculatePorts.mockReturnValue({ web: 3200 });
+    mockFindAvailableSlot.mockReturnValue(2);
+    mockAllocateServicePorts.mockResolvedValue({ ports: { web: 3200 }, drifts: [] });
     mockCalculateDbName.mockReturnValue('myapp_wt2');
     mockDatabaseExists.mockResolvedValue(false);
     mockCreateDatabase.mockResolvedValue();
@@ -236,6 +235,104 @@ describe('new command branch selection', () => {
 
     expect(consoleLogSpy.mock.calls[0]?.[0]).toContain('Source:   origin/feat/auth');
   });
+
+  it('logs drift lines to stderr in human mode', async () => {
+    mockResolveWorktreeBranch.mockReturnValue(originSelection());
+    mockAllocateServicePorts.mockResolvedValue({
+      ports: { web: 3201 },
+      drifts: [
+        {
+          service: 'web',
+          requested: 3200,
+          assigned: 3201,
+          conflict: { kind: 'os', description: 'node[12345]' },
+        },
+      ],
+    });
+
+    await newCommand('feat/auth', { json: false, install: false });
+
+    expect(stderrOutput(stderrSpy)).toContain(
+      'Port 3200 (web) in use by node[12345]; using 3201 instead.',
+    );
+  });
+
+  it('formats internal-conflict drift lines correctly', async () => {
+    mockResolveWorktreeBranch.mockReturnValue(originSelection());
+    mockAllocateServicePorts.mockResolvedValue({
+      ports: { web: 3201 },
+      drifts: [
+        {
+          service: 'web',
+          requested: 3200,
+          assigned: 3201,
+          conflict: { kind: 'internal', slot: 1, service: 'web' },
+        },
+      ],
+    });
+
+    await newCommand('feat/auth', { json: false, install: false });
+
+    expect(stderrOutput(stderrSpy)).toContain(
+      'Port 3200 (web) reserved by slot 1 (web); using 3201 instead.',
+    );
+  });
+
+  it('suppresses drift stderr lines in JSON mode but includes portDrifts in payload', async () => {
+    mockResolveWorktreeBranch.mockReturnValue(originSelection());
+    mockAllocateServicePorts.mockResolvedValue({
+      ports: { web: 3201 },
+      drifts: [
+        {
+          service: 'web',
+          requested: 3200,
+          assigned: 3201,
+          conflict: { kind: 'os', description: 'node[12345]' },
+        },
+      ],
+    });
+
+    await newCommand('feat/auth', { json: true, install: false });
+
+    expect(stderrOutput(stderrSpy)).not.toContain('Port 3200');
+    const output = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] ?? 'null') as {
+      success: boolean;
+      data: { portDrifts: unknown[] };
+    };
+    expect(output.success).toBe(true);
+    expect(output.data.portDrifts).toEqual([
+      {
+        service: 'web',
+        requested: 3200,
+        assigned: 3201,
+        conflict: { kind: 'os', description: 'node[12345]' },
+      },
+    ]);
+  });
+
+  it('uses the explicit slot when --slot is provided and goes through allocateServicePorts', async () => {
+    mockResolveWorktreeBranch.mockReturnValue(originSelection());
+    mockReadRegistry.mockReturnValue({ version: 1, allocations: {} });
+    mockCalculateDbName.mockReturnValue('myapp_wt3');
+    mockAllocateServicePorts.mockResolvedValue({ ports: { web: 3300 }, drifts: [] });
+    mockAddAllocation.mockReturnValue({
+      version: 1,
+      allocations: {
+        '3': { ...allocation, dbName: 'myapp_wt3', ports: { web: 3300 } },
+      },
+    });
+
+    const result = await createNewWorktree('feat/auth', { install: false, slot: '3' });
+
+    expect(result.slot).toBe(3);
+    expect(mockFindAvailableSlot).not.toHaveBeenCalled();
+    expect(mockAllocateServicePorts).toHaveBeenCalledWith(
+      3,
+      config.services,
+      config.portStride,
+      expect.any(Object),
+    );
+  });
 });
 
 describe('new command rollback on failure', () => {
@@ -293,8 +390,8 @@ describe('new command rollback on failure', () => {
     mockGetMainWorktreePath.mockReturnValue(tmpDir);
     mockLoadConfig.mockReturnValue(configWithDocker);
     mockReadRegistry.mockReturnValue({ version: 1, allocations: {} } satisfies Registry);
-    mockFindAvailablePortSafeSlot.mockResolvedValue(2);
-    mockCalculatePorts.mockReturnValue({ web: 3200, redis: 6579 });
+    mockFindAvailableSlot.mockReturnValue(2);
+    mockAllocateServicePorts.mockResolvedValue({ ports: { web: 3200, redis: 6579 }, drifts: [] });
     mockCalculateDbName.mockReturnValue('myapp_wt2');
     mockEnsureDockerServices.mockReturnValue({
       projectName: 'wt-2-myapp-deadbeef',
