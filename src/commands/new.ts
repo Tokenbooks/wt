@@ -1,10 +1,9 @@
 import * as path from 'node:path';
 import { readRegistry, writeRegistry, addAllocation } from '../core/registry';
 import {
-  calculatePorts,
   calculateDbName,
-  findAvailablePortSafeSlot,
-  findUnavailableServicePorts,
+  findAvailableSlot,
+  allocateServicePorts,
 } from '../core/slot-allocator';
 import { copyAndPatchAllEnvFiles } from '../core/env-patcher';
 import { createDatabase, databaseExists, dropDatabase } from '../core/database';
@@ -22,7 +21,7 @@ import {
 } from '../core/git';
 import { extractErrorMessage, formatJson, formatSetupSummary, success, error } from '../output';
 import { loadConfig } from './setup';
-import type { Allocation } from '../types';
+import type { Allocation, PortDrift } from '../types';
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 
@@ -36,6 +35,7 @@ export interface CreateWorktreeResult {
   readonly slot: number;
   readonly allocation: Allocation;
   readonly branchSelection: WorktreeBranchSelection;
+  readonly portDrifts: readonly PortDrift[];
 }
 
 /** Read DATABASE_URL from the main worktree's .env file */
@@ -63,7 +63,7 @@ export async function createNewWorktree(
   const config = loadConfig(mainRoot);
   let registry = readRegistry(mainRoot);
 
-  // Determine slot
+  // Determine slot — port availability no longer affects slot choice.
   let slot: number;
   if (options.slot !== undefined) {
     slot = parseInt(options.slot, 10);
@@ -73,25 +73,12 @@ export async function createNewWorktree(
     if (String(slot) in registry.allocations) {
       throw new Error(`Slot ${slot} is already occupied.`);
     }
-    const requestedPorts = calculatePorts(slot, config.services, config.portStride);
-    const unavailablePorts = await findUnavailableServicePorts(requestedPorts);
-    if (unavailablePorts.length > 0) {
-      const detail = unavailablePorts
-        .map(({ service, port }) => `${service}:${port}`)
-        .join(', ');
-      throw new Error(`Slot ${slot} has ports already in use: ${detail}`);
-    }
   } else {
-    const available = await findAvailablePortSafeSlot(
-      registry,
-      config.maxSlots,
-      config.services,
-      config.portStride,
-    );
+    const available = findAvailableSlot(registry, config.maxSlots);
     if (available === null) {
       throw new Error(
-        `All ${config.maxSlots} slots are occupied or blocked by ports already in use. ` +
-        'Remove a worktree, stop conflicting services, or increase maxSlots.',
+        `All ${config.maxSlots} slots are occupied. ` +
+        'Remove a worktree or increase maxSlots.',
       );
     }
     slot = available;
@@ -110,7 +97,22 @@ export async function createNewWorktree(
   log(describeBranchSelection(branchSelection));
 
   const dbName = calculateDbName(slot, config.baseDatabaseName);
-  const ports = calculatePorts(slot, config.services, config.portStride);
+  const { ports, drifts: portDrifts } = await allocateServicePorts(
+    slot,
+    config.services,
+    config.portStride,
+    registry,
+  );
+  for (const drift of portDrifts) {
+    const detail =
+      drift.conflict.kind === 'os'
+        ? `in use by ${drift.conflict.description}`
+        : `reserved by slot ${drift.conflict.slot} (${drift.conflict.service})`;
+    warn(
+      `Port ${drift.requested} (${drift.service}) ${detail}; ` +
+      `using ${drift.assigned} instead.`,
+    );
+  }
   const databaseUrl = readDatabaseUrl(mainRoot);
 
   // Track what each step has created so we can roll back on failure. Resource
@@ -224,7 +226,7 @@ export async function createNewWorktree(
   }
 
   log(`Ready — slot ${slot}, branch '${actualBranch}'.`);
-  return { slot, allocation, branchSelection };
+  return { slot, allocation, branchSelection, portDrifts };
 }
 
 /** Create a new worktree with full environment isolation */
@@ -233,7 +235,7 @@ export async function newCommand(
   options: NewOptions,
 ): Promise<void> {
   try {
-    const { slot, allocation, branchSelection } = await createNewWorktree(branchName, {
+    const { slot, allocation, branchSelection, portDrifts } = await createNewWorktree(branchName, {
       ...options,
       quiet: options.json,
     });
@@ -246,6 +248,7 @@ export async function newCommand(
             ...allocation,
             branchSource: branchSelection.source,
             branchSourceLabel: branchSelection.sourceLabel,
+            portDrifts,
           }),
         ),
       );
