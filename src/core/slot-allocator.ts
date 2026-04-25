@@ -167,44 +167,6 @@ export async function allocateServicePorts(
   return { ports, drifts };
 }
 
-export async function findUnavailableServicePorts(
-  ports: Record<string, number>,
-): Promise<Array<{ service: string; port: number }>> {
-  const entries = Object.entries(ports);
-  const checks = await Promise.all(
-    entries.map(async ([service, port]) => ({
-      service,
-      port,
-      available: await isPortAvailable(port),
-    })),
-  );
-
-  return checks
-    .filter((item) => !item.available)
-    .map(({ service, port }) => ({ service, port }));
-}
-
-export async function findAvailablePortSafeSlot(
-  registry: Registry,
-  maxSlots: number,
-  services: readonly ServiceConfig[],
-  stride: number,
-): Promise<number | null> {
-  for (let slot = 1; slot <= maxSlots; slot++) {
-    if (String(slot) in registry.allocations) {
-      continue;
-    }
-
-    const ports = calculatePorts(slot, services, stride);
-    const unavailable = await findUnavailableServicePorts(ports);
-    if (unavailable.length === 0) {
-      return slot;
-    }
-  }
-
-  return null;
-}
-
 /**
  * Find the next available slot in the registry.
  * Scans slots 1..maxSlots and returns the first unoccupied one.

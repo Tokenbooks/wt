@@ -4,7 +4,6 @@ import {
   calculatePorts,
   calculateDbName,
   findAvailableSlot,
-  findUnavailableServicePorts,
   validatePortPlan,
   parseLsofOutput,
   describeListener,
@@ -106,28 +105,6 @@ describe('slot-allocator', () => {
           100,
         );
       }).toThrow('exceeds 65535');
-    });
-  });
-
-  describe('findUnavailableServicePorts', () => {
-    it('detects ports already in use on localhost', async () => {
-      const server = net.createServer();
-      await new Promise<void>((resolve) => {
-        server.listen(0, '127.0.0.1', () => resolve());
-      });
-
-      const address = server.address();
-      if (!address || typeof address === 'string') {
-        throw new Error('Expected a TCP address.');
-      }
-
-      const unavailable = await findUnavailableServicePorts({ redis: address.port });
-
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-
-      expect(unavailable).toEqual([{ service: 'redis', port: address.port }]);
     });
   });
 
