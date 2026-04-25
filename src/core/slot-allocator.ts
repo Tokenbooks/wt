@@ -1,7 +1,7 @@
 import * as net from 'node:net';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { ServiceConfig, Registry } from '../types';
+import type { ServiceConfig, Registry, PortDrift, AllocatedPorts } from '../types';
 
 const execFileAsync = promisify(execFile);
 
@@ -78,6 +78,91 @@ async function isPortAvailable(port: number): Promise<boolean> {
     });
     server.listen(port, '127.0.0.1');
   });
+}
+
+/**
+ * Allocate ports for each service in the slot, drifting forward by 1 past
+ * any port that is either already bound at the OS level or already in use
+ * by another slot's allocation in the registry.
+ *
+ * Drift is per-service: only conflicting services move; the rest stay at
+ * their natural slot port. Internal conflicts (registry collisions) are
+ * resolved without probing the OS. OS conflicts trigger best-effort
+ * listener identification via `describeListener`.
+ *
+ * Caps at port 65535. Throws if a service can't find a free port before
+ * the ceiling.
+ */
+export async function allocateServicePorts(
+  slot: number,
+  services: readonly ServiceConfig[],
+  stride: number,
+  registry: Registry,
+): Promise<AllocatedPorts> {
+  // Build a map: port -> { slot, service } for every port already in the
+  // registry across all allocations.
+  const reserved = new Map<number, { slot: number; service: string }>();
+  for (const [slotStr, allocation] of Object.entries(registry.allocations)) {
+    const owningSlot = Number(slotStr);
+    for (const [serviceName, port] of Object.entries(allocation.ports)) {
+      reserved.set(port, { slot: owningSlot, service: serviceName });
+    }
+  }
+
+  const ports: Record<string, number> = {};
+  const drifts: PortDrift[] = [];
+
+  for (const service of services) {
+    const natural = slot * stride + service.defaultPort;
+    let candidate = natural;
+    let conflict: PortDrift['conflict'] | null = null;
+
+    while (candidate <= 65535) {
+      const internalOwner = reserved.get(candidate);
+      if (internalOwner) {
+        if (conflict === null) {
+          conflict = {
+            kind: 'internal',
+            slot: internalOwner.slot,
+            service: internalOwner.service,
+          };
+        }
+        candidate++;
+        continue;
+      }
+
+      if (await isPortAvailable(candidate)) {
+        ports[service.name] = candidate;
+        // Reserve this port for any later service in the same allocation
+        // so two services in one slot can't pick the same drifted port.
+        reserved.set(candidate, { slot, service: service.name });
+        break;
+      }
+
+      if (conflict === null) {
+        const description = await describeListener(candidate);
+        conflict = { kind: 'os', description };
+      }
+      candidate++;
+    }
+
+    if (ports[service.name] === undefined) {
+      throw new Error(
+        `No available port for service '${service.name}' starting from ${natural}; reached 65535.`,
+      );
+    }
+
+    if (candidate !== natural) {
+      drifts.push({
+        service: service.name,
+        requested: natural,
+        assigned: candidate,
+        conflict: conflict!,
+      });
+    }
+  }
+
+  return { ports, drifts };
 }
 
 export async function findUnavailableServicePorts(

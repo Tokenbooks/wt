@@ -8,6 +8,7 @@ import {
   validatePortPlan,
   parseLsofOutput,
   describeListener,
+  allocateServicePorts,
 } from '../src/core/slot-allocator';
 import type { Registry } from '../src/types';
 
@@ -176,6 +177,116 @@ describe('slot-allocator', () => {
       // as "unknown process" rather than throwing.
       const description = await describeListener(1);
       expect(description).toBe('unknown process');
+    });
+  });
+
+  describe('allocateServicePorts', () => {
+    const services = [
+      { name: 'web', defaultPort: 3000 },
+      { name: 'api', defaultPort: 4000 },
+    ] as const;
+    const stride = 100;
+
+    function emptyRegistry(): Registry {
+      return { version: 1, allocations: {} };
+    }
+
+    it('returns natural ports with no drift when everything is free', async () => {
+      const result = await allocateServicePorts(2, services, stride, emptyRegistry());
+
+      expect(result.ports).toEqual({ web: 3200, api: 4200 });
+      expect(result.drifts).toEqual([]);
+    });
+
+    it('drifts a service whose natural port is bound at the OS level', async () => {
+      const server = net.createServer();
+      await new Promise<void>((resolve) => server.listen(3200, '127.0.0.1', () => resolve()));
+
+      try {
+        const result = await allocateServicePorts(2, services, stride, emptyRegistry());
+
+        expect(result.ports.web).toBe(3201);
+        expect(result.ports.api).toBe(4200);
+        expect(result.drifts).toHaveLength(1);
+        expect(result.drifts[0]).toMatchObject({
+          service: 'web',
+          requested: 3200,
+          assigned: 3201,
+          conflict: { kind: 'os' },
+        });
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+      }
+    });
+
+    it('skips ports already in another slot\'s allocation without probing', async () => {
+      const registry: Registry = {
+        version: 1,
+        allocations: {
+          '1': {
+            worktreePath: '/tmp/wt1',
+            branchName: 'feat/a',
+            dbName: 'db_wt1',
+            ports: { web: 3200, api: 4100 },
+            createdAt: '2026-04-25T00:00:00.000Z',
+          },
+        },
+      };
+
+      const result = await allocateServicePorts(2, services, stride, registry);
+
+      // web's natural 3200 is reserved by slot 1; drift to 3201.
+      // api's natural 4200 is free.
+      expect(result.ports).toEqual({ web: 3201, api: 4200 });
+      expect(result.drifts).toEqual([
+        {
+          service: 'web',
+          requested: 3200,
+          assigned: 3201,
+          conflict: { kind: 'internal', slot: 1, service: 'web' },
+        },
+      ]);
+    });
+
+    it('drifts only the conflicting service in a multi-service config', async () => {
+      const server = net.createServer();
+      await new Promise<void>((resolve) => server.listen(4200, '127.0.0.1', () => resolve()));
+
+      try {
+        const result = await allocateServicePorts(2, services, stride, emptyRegistry());
+
+        expect(result.ports.web).toBe(3200);
+        expect(result.ports.api).toBe(4201);
+        expect(result.drifts.map((d) => d.service)).toEqual(['api']);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+      }
+    });
+
+    it('throws when a service exhausts the port space at 65535', async () => {
+      // Service whose natural port is 65535, with that port internally
+      // reserved — drift would have to go to 65536, which we refuse.
+      const registry: Registry = {
+        version: 1,
+        allocations: {
+          '1': {
+            worktreePath: '/tmp/wt1',
+            branchName: 'feat/a',
+            dbName: 'db_wt1',
+            ports: { edge: 65535 },
+            createdAt: '2026-04-25T00:00:00.000Z',
+          },
+        },
+      };
+      const edgeServices = [{ name: 'edge', defaultPort: 65535 }] as const;
+
+      await expect(
+        allocateServicePorts(0, edgeServices, 0, registry),
+      ).rejects.toThrow(/No available port for service 'edge'/);
     });
   });
 });
