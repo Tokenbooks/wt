@@ -130,3 +130,31 @@ export function findAvailableSlot(
   }
   return null;
 }
+
+/**
+ * Parse the output of `lsof -F pcn`. Returns the first listener's pid +
+ * command, or null if the input doesn't contain a complete listener record.
+ */
+export function parseLsofOutput(output: string): { pid: number; command: string } | null {
+  let pid: number | null = null;
+  let command: string | null = null;
+  for (const line of output.split('\n')) {
+    if (line.startsWith('p')) {
+      // Encountering a new pid before completing the previous record means
+      // the previous record was incomplete; reset.
+      if (pid !== null && command === null) {
+        pid = null;
+      }
+      const parsed = Number(line.slice(1));
+      if (Number.isInteger(parsed)) {
+        pid = parsed;
+      }
+    } else if (line.startsWith('c') && pid !== null && command === null) {
+      command = line.slice(1);
+    }
+    if (pid !== null && command !== null) {
+      return { pid, command };
+    }
+  }
+  return null;
+}

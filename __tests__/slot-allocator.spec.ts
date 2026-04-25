@@ -6,6 +6,7 @@ import {
   findAvailableSlot,
   findUnavailableServicePorts,
   validatePortPlan,
+  parseLsofOutput,
 } from '../src/core/slot-allocator';
 import type { Registry } from '../src/types';
 
@@ -125,6 +126,26 @@ describe('slot-allocator', () => {
       });
 
       expect(unavailable).toEqual([{ service: 'redis', port: address.port }]);
+    });
+  });
+
+  describe('parseLsofOutput', () => {
+    it('parses pid and command from a single listener', () => {
+      const out = 'p12345\ncnode\nn*:3200\n';
+      expect(parseLsofOutput(out)).toEqual({ pid: 12345, command: 'node' });
+    });
+
+    it('returns the first listener when multiple are reported', () => {
+      const out = 'p12345\ncnode\nn127.0.0.1:3200\np67890\ncpython3\nn*:3200\n';
+      expect(parseLsofOutput(out)).toEqual({ pid: 12345, command: 'node' });
+    });
+
+    it('returns null on empty output', () => {
+      expect(parseLsofOutput('')).toBeNull();
+    });
+
+    it('returns null when only a name field is present', () => {
+      expect(parseLsofOutput('n*:3200\n')).toBeNull();
     });
   });
 });
