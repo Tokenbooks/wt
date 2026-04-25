@@ -13,11 +13,8 @@ import {
 import { copyAndPatchAllEnvFiles } from '../core/env-patcher';
 import { createDatabase, databaseExists } from '../core/database';
 import {
-  ensureManagedRedisContainer,
-  getAllocationServices,
-  readManagedRedisSourceUrl,
-  usesManagedRedis,
-} from '../core/managed-redis';
+  ensureDockerServices,
+} from '../core/docker-services';
 import { getMainWorktreePath, isMainWorktree, getBranchName } from '../core/git';
 import { extractErrorMessage, formatJson, formatSetupSummary, success, error } from '../output';
 import type { Allocation, WtConfig } from '../types';
@@ -27,127 +24,9 @@ interface SetupOptions {
   readonly install: boolean;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function readPatchedEnvVar(
-  mainRoot: string,
-  source: string,
-  varName: string,
-): string | null {
-  const envPath = path.join(mainRoot, source);
-  if (!fs.existsSync(envPath)) {
-    return null;
-  }
-
-  const content = fs.readFileSync(envPath, 'utf-8');
-  const match = content.match(new RegExp(`^${varName}=["']?([^"'\\n]+)`, 'm'));
-  return match?.[1] ?? null;
-}
-
-function inferLegacyRedisDefaultPort(
-  mainRoot: string,
-  envFiles: readonly unknown[],
-): number {
-  for (const envFile of envFiles) {
-    if (!isRecord(envFile) || typeof envFile.source !== 'string' || !Array.isArray(envFile.patches)) {
-      continue;
-    }
-
-    for (const patch of envFile.patches) {
-      if (!isRecord(patch) || patch.type !== 'redis' || typeof patch.var !== 'string') {
-        continue;
-      }
-
-      const sourceUrl = readPatchedEnvVar(mainRoot, envFile.source, patch.var);
-      if (!sourceUrl) {
-        continue;
-      }
-
-      try {
-        const parsed = new URL(sourceUrl);
-        return Number(parsed.port) || 6379;
-      } catch {
-        return 6379;
-      }
-    }
-  }
-
-  return 6379;
-}
-
-function migrateLegacyConfig(
-  mainRoot: string,
-  raw: unknown,
-): { readonly config: unknown; readonly migrated: boolean } {
-  if (!isRecord(raw)) {
-    return { config: raw, migrated: false };
-  }
-
-  const next = JSON.parse(JSON.stringify(raw)) as Record<string, unknown>;
-  const envFiles = Array.isArray(next.envFiles) ? next.envFiles : [];
-  const services = Array.isArray(next.services) ? [...next.services] : [];
-  const redisServiceNames = new Set<string>();
-  let migrated = false;
-
-  for (const envFile of envFiles) {
-    if (!isRecord(envFile) || !Array.isArray(envFile.patches)) {
-      continue;
-    }
-
-    for (const patch of envFile.patches) {
-      if (!isRecord(patch) || patch.type !== 'redis') {
-        continue;
-      }
-
-      const serviceName = typeof patch.service === 'string' && patch.service.length > 0
-        ? patch.service
-        : 'redis';
-
-      if (patch.service !== serviceName) {
-        patch.service = serviceName;
-        migrated = true;
-      }
-
-      redisServiceNames.add(serviceName);
-    }
-  }
-
-  if (redisServiceNames.size > 0) {
-    const declaredServiceNames = new Set(
-      services
-        .filter(isRecord)
-        .map((service) => (typeof service.name === 'string' ? service.name : null))
-        .filter((name): name is string => name !== null),
-    );
-    const inferredRedisPort = inferLegacyRedisDefaultPort(mainRoot, envFiles);
-
-    for (const serviceName of redisServiceNames) {
-      if (declaredServiceNames.has(serviceName)) {
-        continue;
-      }
-
-      services.push({
-        name: serviceName,
-        defaultPort: inferredRedisPort,
-      });
-      declaredServiceNames.add(serviceName);
-      migrated = true;
-    }
-  }
-
-  if (migrated) {
-    next.services = services;
-  }
-
-  return { config: next, migrated };
-}
-
 function validateConfig(config: WtConfig): WtConfig {
-  const services = getAllocationServices(config);
   const seenServiceNames = new Set<string>();
-  for (const service of services) {
+  for (const service of config.services) {
     if (seenServiceNames.has(service.name)) {
       throw new Error(`Duplicate service name in wt.config.json: ${service.name}`);
     }
@@ -161,16 +40,26 @@ function validateConfig(config: WtConfig): WtConfig {
           `Patch '${patch.var}' references unknown service '${patch.service}'.`,
         );
       }
+    }
+  }
 
-      if (patch.type === 'redis' && patch.service !== 'redis') {
+  const seenDockerServiceNames = new Set<string>();
+  for (const dockerService of config.dockerServices) {
+    if (seenDockerServiceNames.has(dockerService.name)) {
+      throw new Error(`Duplicate docker service name in wt.config.json: ${dockerService.name}`);
+    }
+    seenDockerServiceNames.add(dockerService.name);
+
+    for (const port of dockerService.ports) {
+      if (!seenServiceNames.has(port.service)) {
         throw new Error(
-          `Redis patch '${patch.var}' must use service name 'redis', got '${patch.service}'.`,
+          `Docker service '${dockerService.name}' references unknown port service '${port.service}'.`,
         );
       }
     }
   }
 
-  validatePortPlan(services, config.maxSlots, config.portStride);
+  validatePortPlan(config.services, config.maxSlots, config.portStride);
   return config;
 }
 
@@ -178,13 +67,7 @@ function validateConfig(config: WtConfig): WtConfig {
 export function loadConfig(mainRoot: string): WtConfig {
   const configPath = path.join(mainRoot, 'wt.config.json');
   const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as unknown;
-  const { config, migrated } = migrateLegacyConfig(mainRoot, raw);
-
-  if (migrated) {
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
-  }
-
-  return validateConfig(configSchema.parse(config));
+  return validateConfig(configSchema.parse(raw));
 }
 
 /**
@@ -201,7 +84,7 @@ function readDatabaseUrl(mainRoot: string): string {
   return match[1];
 }
 
-/** Set up an existing worktree with isolated DB, Redis, ports, and env files */
+/** Set up an existing worktree with isolated DB, Docker services, ports, and env files */
 export async function setupCommand(
   targetPath: string | undefined,
   options: SetupOptions,
@@ -222,7 +105,6 @@ export async function setupCommand(
     }
 
     const config = loadConfig(mainRoot);
-    const services = getAllocationServices(config);
     let registry = readRegistry(mainRoot);
 
     // Reuse existing allocation or allocate a new slot
@@ -234,7 +116,7 @@ export async function setupCommand(
       const available = await findAvailablePortSafeSlot(
         registry,
         config.maxSlots,
-        services,
+        config.services,
         config.portStride,
       );
       if (available === null) {
@@ -253,7 +135,7 @@ export async function setupCommand(
     }
 
     const dbName = calculateDbName(slot, config.baseDatabaseName);
-    const ports = calculatePorts(slot, services, config.portStride);
+    const ports = calculatePorts(slot, config.services, config.portStride);
     if (!existing) {
       const unavailablePorts = await findUnavailableServicePorts(ports);
       if (unavailablePorts.length > 0) {
@@ -264,19 +146,6 @@ export async function setupCommand(
       }
     }
     const branchName = getBranchName(worktreePath);
-    const redisSourceUrl = usesManagedRedis(config)
-      ? readManagedRedisSourceUrl(mainRoot, config)
-      : null;
-    const redisContainerName = usesManagedRedis(config)
-      ? ensureManagedRedisContainer({
-        mainRoot,
-        slot,
-        branchName,
-        worktreePath,
-        port: ports.redis!,
-        sourceUrl: redisSourceUrl,
-      })
-      : undefined;
 
     // Create database if it doesn't exist
     const databaseUrl = readDatabaseUrl(mainRoot);
@@ -285,10 +154,19 @@ export async function setupCommand(
       await createDatabase(databaseUrl, config.baseDatabaseName, dbName);
     }
 
+    const docker = ensureDockerServices({
+      mainRoot,
+      slot,
+      branchName,
+      worktreePath,
+      dbName,
+      ports,
+      config,
+    });
+
     // Copy and patch env files
     copyAndPatchAllEnvFiles(config, mainRoot, worktreePath, {
       dbName,
-      redisPort: ports.redis,
       ports,
       branchName,
     });
@@ -298,7 +176,7 @@ export async function setupCommand(
       worktreePath,
       branchName,
       dbName,
-      redisContainerName,
+      docker,
       ports,
       createdAt: new Date().toISOString(),
     };

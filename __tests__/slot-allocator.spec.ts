@@ -135,7 +135,6 @@ function makeAllocation(slot: number) {
     worktreePath: `/tmp/wt${slot}`,
     branchName: `feat/test-${slot}`,
     dbName: `cryptoacc_wt${slot}`,
-    redisContainerName: `wt-project-12345678-slot-${slot}-redis`,
     ports: { app: 3000 + slot * 100, redis: 6379 + slot * 100 },
     createdAt: new Date().toISOString(),
   };

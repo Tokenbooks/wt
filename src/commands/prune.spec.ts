@@ -20,10 +20,10 @@ jest.mock('../core/git', () => ({
   pruneWorktrees: jest.fn(),
 }));
 
-jest.mock('../core/managed-redis', () => ({
-  removeManagedRedisContainer: jest.fn(),
-  listManagedRedisContainersForRepo: jest.fn(),
-  usesManagedRedis: jest.fn(),
+jest.mock('../core/docker-services', () => ({
+  removeDockerServices: jest.fn(),
+  listManagedDockerProjectsForRepo: jest.fn(),
+  usesDockerServices: jest.fn(),
 }));
 
 jest.mock('./setup', () => ({
@@ -34,10 +34,10 @@ import { readRegistry, writeRegistry, removeAllocation, findByPath } from '../co
 import { dropDatabase } from '../core/database';
 import { getMainWorktreePath, listPrunableWorktrees, pruneWorktrees } from '../core/git';
 import {
-  removeManagedRedisContainer,
-  listManagedRedisContainersForRepo,
-  usesManagedRedis,
-} from '../core/managed-redis';
+  removeDockerServices,
+  listManagedDockerProjectsForRepo,
+  usesDockerServices,
+} from '../core/docker-services';
 import { loadConfig } from './setup';
 import { pruneCommand } from './prune';
 import type { Allocation, Registry, WtConfig } from '../types';
@@ -50,12 +50,12 @@ const mockDropDatabase = dropDatabase as jest.MockedFunction<typeof dropDatabase
 const mockGetMainWorktreePath = getMainWorktreePath as jest.MockedFunction<typeof getMainWorktreePath>;
 const mockListPrunableWorktrees = listPrunableWorktrees as jest.MockedFunction<typeof listPrunableWorktrees>;
 const mockPruneWorktrees = pruneWorktrees as jest.MockedFunction<typeof pruneWorktrees>;
-const mockRemoveManagedRedisContainer = removeManagedRedisContainer as jest.MockedFunction<
-  typeof removeManagedRedisContainer
+const mockRemoveDockerServices = removeDockerServices as jest.MockedFunction<
+  typeof removeDockerServices
 >;
-const mockListManagedRedisContainersForRepo =
-  listManagedRedisContainersForRepo as jest.MockedFunction<typeof listManagedRedisContainersForRepo>;
-const mockUsesManagedRedis = usesManagedRedis as jest.MockedFunction<typeof usesManagedRedis>;
+const mockListManagedDockerProjectsForRepo =
+  listManagedDockerProjectsForRepo as jest.MockedFunction<typeof listManagedDockerProjectsForRepo>;
+const mockUsesDockerServices = usesDockerServices as jest.MockedFunction<typeof usesDockerServices>;
 const mockLoadConfig = loadConfig as jest.MockedFunction<typeof loadConfig>;
 
 describe('pruneCommand', () => {
@@ -67,7 +67,10 @@ describe('pruneCommand', () => {
     worktreePath: '/repo/.worktrees/feat-auth',
     branchName: 'feat/auth',
     dbName: 'myapp_wt2',
-    redisContainerName: 'wt-myapp-deadbeef-slot-2-redis',
+    docker: {
+      projectName: 'wt-2-myapp-deadbeef',
+      services: ['redis'],
+    },
     ports: { web: 3200, redis: 6579 },
     createdAt: '2026-03-08T00:00:00.000Z',
   };
@@ -80,6 +83,17 @@ describe('pruneCommand', () => {
     services: [
       { name: 'web', defaultPort: 3000 },
       { name: 'redis', defaultPort: 6379 },
+    ],
+    dockerServices: [
+      {
+        name: 'redis',
+        image: 'redis:8-alpine',
+        restart: 'unless-stopped',
+        ports: [{ service: 'redis', target: 6379, host: '127.0.0.1' }],
+        environment: {},
+        volumes: [],
+        extraHosts: [],
+      },
     ],
     envFiles: [],
     postSetup: [],
@@ -113,9 +127,9 @@ describe('pruneCommand', () => {
       ...registry,
       allocations: {},
     }));
-    mockRemoveManagedRedisContainer.mockReturnValue(true);
-    mockListManagedRedisContainersForRepo.mockReturnValue([]);
-    mockUsesManagedRedis.mockReturnValue(true);
+    mockRemoveDockerServices.mockReturnValue(true);
+    mockListManagedDockerProjectsForRepo.mockReturnValue([]);
+    mockUsesDockerServices.mockReturnValue(true);
     mockLoadConfig.mockReturnValue(config);
     mockListPrunableWorktrees.mockReturnValue([]);
     process.exitCode = 0;
@@ -146,7 +160,7 @@ describe('pruneCommand', () => {
         prunableCount: number;
         managed: Array<{ slot: number }>;
         unmanaged: Array<{ worktreePath: string }>;
-        orphanContainers: Array<{ containerName: string }>;
+        orphanDockerProjects: Array<{ projectName: string }>;
       };
     };
     expect(output.success).toBe(true);
@@ -156,7 +170,7 @@ describe('pruneCommand', () => {
     expect(output.data.unmanaged).toEqual([
       { worktreePath: '/repo/.worktrees/unmanaged', reason: 'gitdir file points to non-existent location' },
     ]);
-    expect(output.data.orphanContainers).toEqual([]);
+    expect(output.data.orphanDockerProjects).toEqual([]);
   });
 
   it('drops managed resources and prunes Git metadata', async () => {
@@ -174,7 +188,7 @@ describe('pruneCommand', () => {
       'myapp',
       expect.any(Function),
     );
-    expect(mockRemoveManagedRedisContainer).toHaveBeenCalledWith(tmpDir, 2, expect.any(Function));
+    expect(mockRemoveDockerServices).toHaveBeenCalledWith(tmpDir, 2, expect.any(Function));
     expect(mockRemoveAllocation).toHaveBeenCalled();
     expect(mockWriteRegistry).toHaveBeenCalledWith(tmpDir, { version: 1, allocations: {} });
     expect(mockPruneWorktrees).toHaveBeenCalledWith(expect.any(Function));
@@ -182,20 +196,20 @@ describe('pruneCommand', () => {
     const output = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] ?? 'null') as {
       success: boolean;
       data: {
-        prunedManaged: Array<{ slot: number; redisContainerRemoved: boolean }>;
+        prunedManaged: Array<{ slot: number; dockerRemoved: boolean }>;
         prunedUnmanaged: Array<{ worktreePath: string }>;
-        prunedOrphanContainers: unknown[];
+        prunedOrphanDockerProjects: unknown[];
         failed: unknown[];
       };
     };
     expect(output.success).toBe(true);
     expect(output.data.prunedManaged).toHaveLength(1);
     expect(output.data.prunedManaged[0]?.slot).toBe(2);
-    expect(output.data.prunedManaged[0]?.redisContainerRemoved).toBe(true);
+    expect(output.data.prunedManaged[0]?.dockerRemoved).toBe(true);
     expect(output.data.prunedUnmanaged).toEqual([
       { worktreePath: '/repo/.worktrees/unmanaged', reason: 'gitdir file points to non-existent location' },
     ]);
-    expect(output.data.prunedOrphanContainers).toEqual([]);
+    expect(output.data.prunedOrphanDockerProjects).toEqual([]);
     expect(output.data.failed).toEqual([]);
   });
 
@@ -213,7 +227,7 @@ describe('pruneCommand', () => {
       'myapp',
       expect.any(Function),
     );
-    expect(mockRemoveManagedRedisContainer).toHaveBeenCalledWith(tmpDir, 2, expect.any(Function));
+    expect(mockRemoveDockerServices).toHaveBeenCalledWith(tmpDir, 2, expect.any(Function));
     expect(mockRemoveAllocation).toHaveBeenCalled();
     expect(mockWriteRegistry).toHaveBeenCalled();
     // No Git-prunable entries, so `git worktree prune` must not run.
@@ -237,7 +251,7 @@ describe('pruneCommand', () => {
     await pruneCommand({ json: true, keepDb: false, dryRun: false });
 
     expect(mockDropDatabase).toHaveBeenCalledTimes(1);
-    expect(mockRemoveManagedRedisContainer).toHaveBeenCalledTimes(1);
+    expect(mockRemoveDockerServices).toHaveBeenCalledTimes(1);
     expect(mockRemoveAllocation).toHaveBeenCalledTimes(1);
 
     const output = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] ?? 'null') as {
@@ -250,19 +264,32 @@ describe('pruneCommand', () => {
     expect(output.data.prunedManaged[0]?.reasonSource).toBe('git');
   });
 
-  it('removes orphan Redis containers whose slot is not in the registry', async () => {
-    mockListManagedRedisContainersForRepo.mockReturnValue([
+  it('removes orphan Docker projects whose slot is not in the registry', async () => {
+    mockListManagedDockerProjectsForRepo.mockReturnValue([
       // slot 2 matches the live registry entry — NOT an orphan.
-      { containerName: 'wt-myapp-deadbeef-slot-2-redis', slot: 2, branch: 'feat/auth' },
+      {
+        projectName: 'wt-2-myapp-deadbeef',
+        slot: 2,
+        branch: 'feat/auth',
+        services: ['redis'],
+        containerNames: ['wt-2-myapp-deadbeef-redis'],
+      },
       // slot 7 has no registry entry — orphan.
       {
-        containerName: 'wt-myapp-deadbeef-slot-7-redis',
+        projectName: 'wt-7-myapp-deadbeef',
         slot: 7,
         branch: 'fix/old',
         worktreePath: '/repo/.worktrees/fix-old',
+        services: ['redis', 'electric'],
+        containerNames: ['wt-7-myapp-deadbeef-redis', 'wt-7-myapp-deadbeef-electric'],
       },
       // slot 9 has no registry entry — orphan.
-      { containerName: 'wt-myapp-deadbeef-slot-9-redis', slot: 9 },
+      {
+        projectName: 'wt-9-myapp-deadbeef',
+        slot: 9,
+        services: ['redis'],
+        containerNames: ['wt-9-myapp-deadbeef-redis'],
+      },
     ]);
     // Registry entry for slot 2 points to an existing dir so it stays put.
     const livePath = path.join(tmpDir, 'live-worktree');
@@ -276,48 +303,44 @@ describe('pruneCommand', () => {
 
     await pruneCommand({ json: true, keepDb: false, dryRun: false });
 
-    // Registry slot 2 should remain — we must not touch its container.
-    expect(mockRemoveManagedRedisContainer).not.toHaveBeenCalledWith(tmpDir, 2, expect.any(Function));
-    expect(mockRemoveManagedRedisContainer).toHaveBeenCalledWith(tmpDir, 7, expect.any(Function));
-    expect(mockRemoveManagedRedisContainer).toHaveBeenCalledWith(tmpDir, 9, expect.any(Function));
+    // Registry slot 2 should remain — we must not touch its Docker project.
+    expect(mockRemoveDockerServices).not.toHaveBeenCalledWith(tmpDir, 2, expect.any(Function));
+    expect(mockRemoveDockerServices).toHaveBeenCalledWith(tmpDir, 7, expect.any(Function));
+    expect(mockRemoveDockerServices).toHaveBeenCalledWith(tmpDir, 9, expect.any(Function));
     expect(mockWriteRegistry).not.toHaveBeenCalled();
 
     const output = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] ?? 'null') as {
       data: {
         prunedManaged: unknown[];
-        prunedOrphanContainers: Array<{ slot: number; containerName: string; removed: boolean }>;
+        prunedOrphanDockerProjects: Array<{ slot: number; projectName: string; removed: boolean }>;
       };
     };
     expect(output.data.prunedManaged).toEqual([]);
-    expect(output.data.prunedOrphanContainers).toHaveLength(2);
-    expect(output.data.prunedOrphanContainers.map((o) => o.slot).sort()).toEqual([7, 9]);
-    expect(output.data.prunedOrphanContainers.every((o) => o.removed)).toBe(true);
+    expect(output.data.prunedOrphanDockerProjects).toHaveLength(2);
+    expect(output.data.prunedOrphanDockerProjects.map((o) => o.slot).sort()).toEqual([7, 9]);
+    expect(output.data.prunedOrphanDockerProjects.every((o) => o.removed)).toBe(true);
   });
 
-  it('reports orphan Redis containers in dry-run without touching Docker', async () => {
-    mockListManagedRedisContainersForRepo.mockReturnValue([
-      { containerName: 'wt-myapp-deadbeef-slot-9-redis', slot: 9 },
+  it('reports orphan Docker projects in dry-run without touching Docker', async () => {
+    mockListManagedDockerProjectsForRepo.mockReturnValue([
+      {
+        projectName: 'wt-9-myapp-deadbeef',
+        slot: 9,
+        services: ['redis'],
+        containerNames: ['wt-9-myapp-deadbeef-redis'],
+      },
     ]);
     mockReadRegistry.mockReturnValue({ version: 1, allocations: {} } satisfies Registry);
 
     await pruneCommand({ json: true, keepDb: false, dryRun: true });
 
-    expect(mockRemoveManagedRedisContainer).not.toHaveBeenCalled();
+    expect(mockRemoveDockerServices).not.toHaveBeenCalled();
 
     const output = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] ?? 'null') as {
-      data: { orphanContainers: Array<{ slot: number }> };
+      data: { orphanDockerProjects: Array<{ slot: number }> };
     };
-    expect(output.data.orphanContainers).toHaveLength(1);
-    expect(output.data.orphanContainers[0]?.slot).toBe(9);
-  });
-
-  it('does not scan Docker when managed Redis is disabled for the repo', async () => {
-    mockUsesManagedRedis.mockReturnValue(false);
-    mockReadRegistry.mockReturnValue({ version: 1, allocations: {} } satisfies Registry);
-
-    await pruneCommand({ json: true, keepDb: false, dryRun: true });
-
-    expect(mockListManagedRedisContainersForRepo).not.toHaveBeenCalled();
+    expect(output.data.orphanDockerProjects).toHaveLength(1);
+    expect(output.data.orphanDockerProjects[0]?.slot).toBe(9);
   });
 
   it('reports nothing-to-prune cleanly when registry is empty and no orphans exist', async () => {
@@ -326,7 +349,7 @@ describe('pruneCommand', () => {
     await pruneCommand({ json: true, keepDb: false, dryRun: false });
 
     expect(mockDropDatabase).not.toHaveBeenCalled();
-    expect(mockRemoveManagedRedisContainer).not.toHaveBeenCalled();
+    expect(mockRemoveDockerServices).not.toHaveBeenCalled();
     expect(mockWriteRegistry).not.toHaveBeenCalled();
 
     const output = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] ?? 'null') as {
@@ -334,12 +357,12 @@ describe('pruneCommand', () => {
       data: {
         prunedManaged: unknown[];
         prunedUnmanaged: unknown[];
-        prunedOrphanContainers: unknown[];
+        prunedOrphanDockerProjects: unknown[];
         failed: unknown[];
       };
     };
     expect(output.success).toBe(true);
     expect(output.data.prunedManaged).toEqual([]);
-    expect(output.data.prunedOrphanContainers).toEqual([]);
+    expect(output.data.prunedOrphanDockerProjects).toEqual([]);
   });
 });

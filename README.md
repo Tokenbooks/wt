@@ -1,6 +1,6 @@
 # wt — Git Worktree Environment Isolation
 
-A CLI tool that gives each git worktree its own Postgres database, managed Redis container, ports, and `.env` files. Prevents worktrees from corrupting each other's data.
+A CLI tool that gives each git worktree its own Postgres database, Docker services, ports, and `.env` files. Prevents worktrees from corrupting each other's data.
 
 ## The Problem
 
@@ -11,7 +11,7 @@ When you use `git worktree add` for parallel development, all worktrees share th
 - Two dev servers can't run simultaneously on the same port
 - `.env` files point to the same resources everywhere
 
-`wt` solves this by assigning each worktree an isolated **slot** that determines its database name, Redis container, and port range.
+`wt` solves this by assigning each worktree an isolated **slot** that determines its database name, Docker Compose project, and port range.
 
 ## How It Works
 
@@ -20,11 +20,11 @@ Each worktree gets a numbered slot. The slot determines everything:
 | Resource | Formula | Slot 0 (main) | Slot 1 | Slot 2 | Slot 3 |
 |----------|---------|:-:|:-:|:-:|:-:|
 | Database | `{baseName}_wt{slot}` | `mydb` | `mydb_wt1` | `mydb_wt2` | `mydb_wt3` |
-| Redis | `wt-<repo>-<hash>-slot-<slot>-redis` on `6379 + slot * stride` | shared/local | `6479` | `6579` | `6679` |
+| Docker project | `wt-<slot>-<repo>-<hash>` | shared/local | slot 1 group | slot 2 group | slot 3 group |
 | Ports | `slot * stride + defaultPort` | 3000, 3001 | 3100, 3101 | 3200, 3201 | 3300, 3301 |
 
 - **Database**: Created via `CREATE DATABASE ... TEMPLATE` (fast filesystem copy, not dump/restore)
-- **Redis**: Runs in a dedicated Docker container per worktree, visible in Docker Desktop
+- **Docker services**: Run in a dedicated Docker Compose project per worktree, grouped in Docker Desktop
 - **Ports**: Offset by `portStride` (default 100) per slot
 - **Env files**: Copied from main worktree and patched with the slot's values
 
@@ -57,7 +57,30 @@ Create this file in your repository root and commit it. See [Configuration Refer
   "services": [
     { "name": "web", "defaultPort": 3000 },
     { "name": "api", "defaultPort": 4000 },
+    { "name": "electric", "defaultPort": 3004 },
     { "name": "redis", "defaultPort": 6379 }
+  ],
+  "dockerServices": [
+    {
+      "name": "redis",
+      "image": "redis:8-alpine",
+      "ports": [
+        { "service": "redis", "target": 6379 }
+      ],
+      "command": ["redis-server", "--requirepass", "local_password"]
+    },
+    {
+      "name": "electric",
+      "image": "docker.io/electricsql/electric:subqueries-beta-7",
+      "ports": [
+        { "service": "electric", "target": 3000 }
+      ],
+      "environment": {
+        "DATABASE_URL": "postgresql://user:password@host.docker.internal:5432/{{dbName}}?sslmode=disable",
+        "ELECTRIC_INSECURE": "true",
+        "ELECTRIC_USAGE_REPORTING": "false"
+      }
+    }
   ],
   "envFiles": [
     {
@@ -70,7 +93,7 @@ Create this file in your repository root and commit it. See [Configuration Refer
       "source": "backend/.env",
       "patches": [
         { "var": "DATABASE_URL", "type": "database" },
-        { "var": "REDIS_URL", "type": "redis", "service": "redis" },
+        { "var": "REDIS_URL", "type": "url", "service": "redis" },
         { "var": "PORT", "type": "port", "service": "api" }
       ]
     },
@@ -137,7 +160,7 @@ Creates a new git worktree and sets up its isolated environment:
 2. Checks whether `origin/<branch>` exists; if it does, fetches it and creates a tracking local branch, otherwise creates a fresh local branch
 3. Creates a new Postgres database from the main DB as template
 4. Copies all configured `.env` files, patching each with slot-specific values
-5. Starts a managed Redis Docker container if Redis patching is configured
+5. Starts configured Docker services after the slot database exists
 6. Runs `postSetup` commands (unless `--no-install`)
 
 ### `wt open <slot-or-branch> [--no-install] [--json]`
@@ -173,7 +196,7 @@ If the worktree already has a slot allocation, it reuses it.
 Removes a worktree and cleans up its resources:
 
 1. Drops the worktree's Postgres database (unless `--keep-db`)
-2. Removes the managed Redis Docker container for that slot
+2. Removes the managed Docker project for that slot
 3. Runs `git worktree remove`
 4. Removes the allocation from the registry
 
@@ -190,7 +213,7 @@ Finds worktrees that Git already marks as prunable, then:
 
 1. Cleans up `wt`-managed resources for matching registry entries
 2. Drops their databases unless `--keep-db` is set
-3. Removes managed Redis containers if present
+3. Removes managed Docker projects if present
 4. Runs `git worktree prune`
 
 This is mainly for worktrees that were deleted manually from disk instead of through `wt remove`.
@@ -199,7 +222,7 @@ Use `--dry-run` to preview what would be pruned.
 
 ### `wt list [--json]`
 
-Shows all worktree allocations with their slot, branch, database, Redis info, ports, and status (ok/stale).
+Shows all worktree allocations with their slot, branch, database, Docker project, ports, and status (ok/stale).
 
 ### `wt doctor [--fix] [--json]`
 
@@ -256,10 +279,30 @@ This file lives in your repository root and is committed to version control.
   "maxSlots": number,
 
   // Services that need port allocation.
-  // If you use a `redis` patch and omit a redis service,
-  // wt assumes { name: "redis", defaultPort: 6379 }.
   "services": [
     { "name": string, "defaultPort": number }
+  ],
+
+  // Docker services to run per worktree (default: []).
+  // wt renders this into an internal Docker Compose project named
+  // wt-<slot>-<repo>-<hash>, so Docker Desktop groups them together.
+  "dockerServices": [
+    {
+      "name": string,
+      "image": string,
+      "restart": "no" | "always" | "unless-stopped" | "on-failure",
+      "ports": [
+        {
+          "service": string,   // service name from "services"
+          "target": number,    // container port
+          "host": string       // default "127.0.0.1"
+        }
+      ],
+      "environment": { [key: string]: string },
+      "command": string | string[],
+      "volumes": string[],
+      "extraHosts": string[]
+    }
   ],
 
   // Env files to copy and patch for each worktree
@@ -269,8 +312,8 @@ This file lives in your repository root and is committed to version control.
       "patches": [
         {
           "var": string,       // Env var name to patch
-          "type": string,      // "database" | "redis" | "port" | "url"
-          "service": string    // Required for "redis", "port", and "url" types
+          "type": string,      // "database" | "port" | "url" | "branch"
+          "service": string    // Required for "port" and "url" types
         }
       ]
     }
@@ -284,18 +327,20 @@ This file lives in your repository root and is committed to version control.
 }
 ```
 
-Legacy configs that used a `redis` patch without an explicit `redis` service are auto-migrated on first run.
+`dockerServices` string values support these templates: `{{slot}}`, `{{dbName}}`, `{{branchName}}`, `{{worktreePath}}`, `{{mainRoot}}`, `{{projectName}}`, `{{ports.<service>}}`, and `{{services.<service>.port}}`.
 
 ### Patch Types
 
 | Type | What it patches | Input | Output (slot 3) |
 |------|----------------|-------|------------------|
 | `database` | Replaces DB name in a Postgres URL | `postgresql://u:p@host:5432/myapp?schema=public` | `postgresql://u:p@host:5432/myapp_wt3?schema=public` |
-| `redis` | Rewrites a Redis URL to the managed local Redis container on DB 0 | `redis://:pass@host:6379/0` | `redis://:pass@127.0.0.1:6679/0` |
 | `port` | Replaces the entire value with the allocated port | `4000` | `4300` |
 | `url` | Replaces the port number inside a URL | `http://localhost:4000/api` | `http://localhost:4300/api` |
+| `branch` | Replaces the entire value with the current git branch | `main` | `feat/my-work` |
 
-The `redis`, `port`, and `url` types require a `service` field that matches a name in `services`.
+The `port` and `url` types require a `service` field that matches a name in `services`.
+
+Legacy `type: "redis"` patches are no longer supported. Declare Redis in `dockerServices` and patch `REDIS_URL` with `type: "url"` instead.
 
 ### `.worktree-registry.json`
 
@@ -309,7 +354,10 @@ Auto-managed file at the repo root. **Add to `.gitignore`** — it's machine-loc
       "worktreePath": "/absolute/path/to/.worktrees/feat-auth",
       "branchName": "feat/auth",
       "dbName": "myapp_wt1",
-      "redisContainerName": "wt-myapp-a1b2c3d4-slot-1-redis",
+      "docker": {
+        "projectName": "wt-1-myapp-a1b2c3d4",
+        "services": ["redis", "electric"]
+      },
       "ports": { "web": 3100, "api": 4100, "redis": 6479 },
       "createdAt": "2026-02-17T14:30:00Z"
     }
@@ -370,8 +418,9 @@ If you are an LLM agent setting up `wt` for a repository, follow these steps:
 Identify these from the repository:
 
 - **Database URL format**: Search `.env` files for `DATABASE_URL`. Extract the database name (the path segment after the port, before `?`).
-- **Redis URL format**: Search for `REDIS_URL`. `wt` will rewrite it to a local Docker-managed Redis URL on DB 0.
-- **Services and ports**: Find all dev server commands and their default ports. Check `package.json` scripts, `docker-compose.yml`, and framework configs.
+- **Redis URL format**: Search for `REDIS_URL`. If Redis should be per-worktree, declare Redis in both `services` and `dockerServices`, then patch `REDIS_URL` with `type: "url"`.
+- **Services and ports**: Find all dev server commands and their default ports. Check `package.json` scripts, existing Docker Compose files, and framework configs.
+- **Docker services**: Move per-worktree containers from Docker Compose files into `dockerServices`.
 - **Env files**: List all `.env` files (not `.env.example`). These are the files that need patching.
 
 ### Step 2: Map env vars to patch types
@@ -381,7 +430,7 @@ For each `.env` file, identify which variables need patching:
 | If the variable contains... | Use patch type |
 |----------------------------|----------------|
 | A Postgres connection URL (`postgresql://...`) | `database` |
-| A Redis connection URL (`redis://...`) | `redis` + service name (`redis`) |
+| A Redis connection URL (`redis://...`) | `url` + service name (`redis`) |
 | Just a port number (`3000`) | `port` + service name |
 | A URL with a port (`http://localhost:3000/...`) | `url` + service name |
 
@@ -394,14 +443,15 @@ Using the discovered information, construct the config:
 ```
 1. baseDatabaseName = the DB name from the main DATABASE_URL
 2. services = each dev server as { name, defaultPort }
-3. if using a `redis` patch, include { name: "redis", defaultPort: 6379 } unless you want a custom base port
+3. dockerServices = each per-worktree container, with ports referencing `services`
 4. envFiles = each .env file with its patches
 5. postSetup = the install command for the package manager (npm install, pnpm install, etc.)
 ```
 
 Validate that:
 - Every `port` and `url` patch has a `service` that exists in `services`
-- If using a `redis` patch, Docker is available locally and the Redis service port is included or left to the default `6379`
+- Every `dockerServices[].ports[].service` exists in `services`
+- If using `dockerServices`, Docker is available locally
 - The `portStride` (default 100) doesn't cause port collisions with other local services
 - `maxSlots * portStride` doesn't push ports into reserved ranges (e.g., above 65535)
 
@@ -424,7 +474,7 @@ wt list          # Should show the new allocation
 wt remove .worktrees/test-wt-smoke
 wt list          # Should be empty again
 
-# Opt-in Docker integration test for managed Redis
+# Opt-in Docker integration test for managed Docker services
 pnpm test:docker
 ```
 
@@ -445,7 +495,7 @@ pnpm test:docker
 
 - Node.js >= 20.19.0
 - PostgreSQL (running, accessible via `DATABASE_URL` in root `.env`)
-- Docker (if using `redis` patch type)
+- Docker (if using `dockerServices`)
 - Git (for worktree operations)
 
 ## License

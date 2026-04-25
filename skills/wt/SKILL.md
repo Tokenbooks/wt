@@ -1,13 +1,13 @@
 ---
 name: wt
-description: Manage git worktree isolation — create, list, remove, and prune worktrees with isolated databases, managed Redis, and ports
+description: Manage git worktree isolation — create, list, remove, and prune worktrees with isolated databases, Docker services, and ports
 argument-hint: "[new|open|list|remove|prune|doctor|setup|init] [args...]"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 ---
 
 # wt — Git Worktree Isolation
 
-You are managing git worktrees with isolated Postgres databases, managed Redis Docker containers, and ports using the `wt` CLI.
+You are managing git worktrees with isolated Postgres databases, per-worktree Docker services, and ports using the `wt` CLI.
 
 ## Routing
 
@@ -23,7 +23,8 @@ Search the repository to find:
 - All `.env` files (not `.env.example`): `find . -name '.env' -not -path '*/node_modules/*' -not -path '*/.git/*'`
 - The `DATABASE_URL` value to extract the base database name (path segment after the port, before `?`)
 - Any `REDIS_URL` values and their base port/auth format
-- All services and their default ports — check `package.json` scripts, `docker-compose.yml`, framework config files
+- All services and their default ports — check `package.json` scripts, Docker Compose files, framework config files
+- Per-worktree Docker services that should move into `dockerServices`
 - The package manager in use (`pnpm`, `npm`, `yarn`) — check for lockfiles
 
 **Step 2: Map env vars to patch types**
@@ -33,7 +34,7 @@ For each `.env` file, examine every variable and classify:
 | Variable contains | Patch type | Needs `service`? |
 |---|---|---|
 | Postgres connection URL (`postgresql://...`) | `database` | No |
-| Redis connection URL (`redis://...`) | `redis` | Yes (`redis`) |
+| Redis connection URL (`redis://...`) | `url` | Yes (`redis`) |
 | Just a port number | `port` | Yes |
 | A URL containing a service port (`http://localhost:3000/...`) | `url` | Yes |
 | Anything else (API keys, secrets, flags) | Skip — do not patch | — |
@@ -52,11 +53,18 @@ Build the config file at the repository root:
     { "name": "<service>", "defaultPort": <port> },
     { "name": "redis", "defaultPort": <port from REDIS_URL or 6379> }
   ],
+  "dockerServices": [
+    {
+      "name": "redis",
+      "image": "redis:8-alpine",
+      "ports": [{ "service": "redis", "target": 6379 }]
+    }
+  ],
   "envFiles": [
     {
       "source": "<relative path to .env file>",
       "patches": [
-        { "var": "<VAR_NAME>", "type": "<database|redis|port|url>", "service": "<name>" }
+        { "var": "<VAR_NAME>", "type": "<database|port|url|branch>", "service": "<name>" }
       ]
     }
   ],
@@ -66,10 +74,12 @@ Build the config file at the repository root:
 ```
 
 Validation rules:
-- Every `redis`, `port`, and `url` patch must have a `service` that exists in `services`
+- Every `port` and `url` patch must have a `service` that exists in `services`
+- Every `dockerServices[].ports[].service` must exist in `services`
 - `portStride` * `maxSlots` + max default port must be < 65535
 - `baseDatabaseName` must match the actual DB name in `DATABASE_URL`
-- If using a `redis` patch, Docker must be available locally
+- If using `dockerServices`, Docker must be available locally
+- Do not use legacy `type: "redis"` patches; use `type: "url"` for `REDIS_URL`
 
 **Step 4: Install wt**
 
@@ -238,7 +248,7 @@ Show a brief help:
 ```
 Available commands:
   /wt init              — Set up wt in a new repository (discovers env files, generates config)
-  /wt new <branch>      — Create a worktree with isolated DB, managed Redis, and ports
+  /wt new <branch>      — Create a worktree with isolated DB, Docker services, and ports
   /wt open <slot|branch> — Open a worktree by slot or branch (creates if not found)
   /wt list              — List all worktree allocations
   /wt remove <targets...>|--all — Remove one or more worktrees and clean up resources

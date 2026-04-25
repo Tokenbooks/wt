@@ -5,7 +5,6 @@ import type { PatchConfig, PatchContext } from '../src/types';
 describe('env-patcher', () => {
   const context: PatchContext = {
     dbName: 'cryptoacc_wt3',
-    redisPort: 3379,
     ports: { app: 3300, server: 3301, 'sync-exchanges': 3302, redis: 3379 },
     branchName: 'chore/observability',
   };
@@ -40,8 +39,8 @@ describe('env-patcher', () => {
     });
   });
 
-  describe('redis patch', () => {
-    const patches: PatchConfig[] = [{ var: 'REDIS_URL', type: 'redis', service: 'redis' }];
+  describe('redis url patch', () => {
+    const patches: PatchConfig[] = [{ var: 'REDIS_URL', type: 'url', service: 'redis' }];
 
     it.each([
       [
@@ -52,7 +51,7 @@ describe('env-patcher', () => {
       [
         'without DB index',
         'REDIS_URL=redis://:local_password@localhost:6379',
-        'REDIS_URL=redis://:local_password@127.0.0.1:3379/0',
+        'REDIS_URL=redis://:local_password@localhost:3379',
       ],
     ])('%s', (_name, input, expected) => {
       // Act
@@ -184,7 +183,7 @@ describe('env-patcher', () => {
 
       const patches: PatchConfig[] = [
         { var: 'DATABASE_URL', type: 'database' },
-        { var: 'REDIS_URL', type: 'redis', service: 'redis' },
+        { var: 'REDIS_URL', type: 'url', service: 'redis' },
         { var: 'PORT', type: 'port', service: 'server' },
       ];
 

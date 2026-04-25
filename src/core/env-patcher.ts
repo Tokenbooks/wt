@@ -1,7 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { PatchConfig, PatchContext, WtConfig } from '../types';
-import { patchManagedRedisUrl } from './managed-redis';
 
 type PortPatch = Extract<PatchConfig, { type: 'port' }>;
 type UrlPatch = Extract<PatchConfig, { type: 'url' }>;
@@ -19,8 +18,6 @@ function applyPatch(
   switch (patch.type) {
     case 'database':
       return patchDatabaseUrl(value, context.dbName);
-    case 'redis':
-      return patchRedisUrl(value, context);
     case 'port':
       return patchPort(patch, context);
     case 'url':
@@ -39,17 +36,6 @@ function patchDatabaseUrl(url: string, dbName: string): string {
     /\/([^/?]+)(\?|$)/,
     `/${dbName}$2`,
   );
-}
-
-/**
- * Rewrite a Redis URL to point at the managed per-worktree Redis container.
- * The managed Redis always runs locally on DB 0.
- */
-function patchRedisUrl(url: string, context: PatchContext): string {
-  if (context.redisPort === undefined) {
-    throw new Error('Redis patch requires an allocated redis service port.');
-  }
-  return patchManagedRedisUrl(url, context.redisPort);
 }
 
 /** Replace port value entirely with the allocated port for the service */

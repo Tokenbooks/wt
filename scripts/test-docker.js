@@ -13,7 +13,7 @@ execFileSync(
   [
     'exec',
     'jest',
-    '__tests__/managed-redis.docker.spec.ts',
+    '__tests__/docker-services.docker.spec.ts',
     '--runInBand',
   ],
   {
