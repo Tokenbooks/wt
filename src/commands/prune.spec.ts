@@ -68,7 +68,7 @@ describe('pruneCommand', () => {
     branchName: 'feat/auth',
     dbName: 'myapp_wt2',
     docker: {
-      projectName: 'wt-myapp-deadbeef-slot-2',
+      projectName: 'wt-2-myapp-deadbeef',
       services: ['redis'],
     },
     ports: { web: 3200, redis: 6579 },
@@ -268,27 +268,27 @@ describe('pruneCommand', () => {
     mockListManagedDockerProjectsForRepo.mockReturnValue([
       // slot 2 matches the live registry entry — NOT an orphan.
       {
-        projectName: 'wt-myapp-deadbeef-slot-2',
+        projectName: 'wt-2-myapp-deadbeef',
         slot: 2,
         branch: 'feat/auth',
         services: ['redis'],
-        containerNames: ['wt-myapp-deadbeef-slot-2-redis'],
+        containerNames: ['wt-2-myapp-deadbeef-redis'],
       },
       // slot 7 has no registry entry — orphan.
       {
-        projectName: 'wt-myapp-deadbeef-slot-7',
+        projectName: 'wt-7-myapp-deadbeef',
         slot: 7,
         branch: 'fix/old',
         worktreePath: '/repo/.worktrees/fix-old',
         services: ['redis', 'electric'],
-        containerNames: ['wt-myapp-deadbeef-slot-7-redis', 'wt-myapp-deadbeef-slot-7-electric'],
+        containerNames: ['wt-7-myapp-deadbeef-redis', 'wt-7-myapp-deadbeef-electric'],
       },
       // slot 9 has no registry entry — orphan.
       {
-        projectName: 'wt-myapp-deadbeef-slot-9',
+        projectName: 'wt-9-myapp-deadbeef',
         slot: 9,
         services: ['redis'],
-        containerNames: ['wt-myapp-deadbeef-slot-9-redis'],
+        containerNames: ['wt-9-myapp-deadbeef-redis'],
       },
     ]);
     // Registry entry for slot 2 points to an existing dir so it stays put.
@@ -324,10 +324,10 @@ describe('pruneCommand', () => {
   it('reports orphan Docker projects in dry-run without touching Docker', async () => {
     mockListManagedDockerProjectsForRepo.mockReturnValue([
       {
-        projectName: 'wt-myapp-deadbeef-slot-9',
+        projectName: 'wt-9-myapp-deadbeef',
         slot: 9,
         services: ['redis'],
-        containerNames: ['wt-myapp-deadbeef-slot-9-redis'],
+        containerNames: ['wt-9-myapp-deadbeef-redis'],
       },
     ]);
     mockReadRegistry.mockReturnValue({ version: 1, allocations: {} } satisfies Registry);

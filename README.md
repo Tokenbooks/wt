@@ -20,7 +20,7 @@ Each worktree gets a numbered slot. The slot determines everything:
 | Resource | Formula | Slot 0 (main) | Slot 1 | Slot 2 | Slot 3 |
 |----------|---------|:-:|:-:|:-:|:-:|
 | Database | `{baseName}_wt{slot}` | `mydb` | `mydb_wt1` | `mydb_wt2` | `mydb_wt3` |
-| Docker project | `wt-<repo>-<hash>-slot-<slot>` | shared/local | slot 1 group | slot 2 group | slot 3 group |
+| Docker project | `wt-<slot>-<repo>-<hash>` | shared/local | slot 1 group | slot 2 group | slot 3 group |
 | Ports | `slot * stride + defaultPort` | 3000, 3001 | 3100, 3101 | 3200, 3201 | 3300, 3301 |
 
 - **Database**: Created via `CREATE DATABASE ... TEMPLATE` (fast filesystem copy, not dump/restore)
@@ -285,7 +285,7 @@ This file lives in your repository root and is committed to version control.
 
   // Docker services to run per worktree (default: []).
   // wt renders this into an internal Docker Compose project named
-  // wt-<repo>-<hash>-slot-<slot>, so Docker Desktop groups them together.
+  // wt-<slot>-<repo>-<hash>, so Docker Desktop groups them together.
   "dockerServices": [
     {
       "name": string,
@@ -355,7 +355,7 @@ Auto-managed file at the repo root. **Add to `.gitignore`** — it's machine-loc
       "branchName": "feat/auth",
       "dbName": "myapp_wt1",
       "docker": {
-        "projectName": "wt-myapp-a1b2c3d4-slot-1",
+        "projectName": "wt-1-myapp-a1b2c3d4",
         "services": ["redis", "electric"]
       },
       "ports": { "web": 3100, "api": 4100, "redis": 6479 },

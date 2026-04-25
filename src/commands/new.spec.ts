@@ -297,7 +297,7 @@ describe('new command rollback on failure', () => {
     mockCalculatePorts.mockReturnValue({ web: 3200, redis: 6579 });
     mockCalculateDbName.mockReturnValue('myapp_wt2');
     mockEnsureDockerServices.mockReturnValue({
-      projectName: 'wt-myapp-deadbeef-slot-2',
+      projectName: 'wt-2-myapp-deadbeef',
       services: ['redis'],
     });
     mockRemoveDockerServices.mockReturnValue(true);

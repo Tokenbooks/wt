@@ -54,7 +54,7 @@ describe('docker-services', () => {
   it('builds a deterministic Docker Compose project name from repo path and slot', () => {
     const name = getDockerProjectName('/Users/dev/My Project', 7);
 
-    expect(name).toMatch(/^wt-my-project-[a-f0-9]{8}-slot-7$/);
+    expect(name).toMatch(/^wt-7-my-project-[a-f0-9]{8}$/);
     expect(getDockerProjectName('/Users/dev/My Project', 7)).toBe(name);
   });
 

@@ -27,7 +27,7 @@ describe('registry', () => {
     branchName: 'feat/test',
     dbName: 'cryptoacc_wt1',
     docker: {
-      projectName: 'wt-project-12345678-slot-1',
+      projectName: 'wt-1-project-12345678',
       services: ['redis'],
     },
     ports: { app: 3100, server: 3101, redis: 6479 },

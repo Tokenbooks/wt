@@ -198,7 +198,7 @@ export function usesDockerServices(config: WtConfig): boolean {
 
 export function getDockerProjectName(mainRoot: string, slot: number): string {
   const repoName = slugify(path.basename(mainRoot));
-  return `wt-${repoName}-${repoHash(mainRoot)}-slot-${slot}`;
+  return `wt-${slot}-${repoName}-${repoHash(mainRoot)}`;
 }
 
 export function buildDockerComposeConfig(options: EnsureDockerServicesOptions): DockerComposeConfig {
