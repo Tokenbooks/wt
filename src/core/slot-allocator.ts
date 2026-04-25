@@ -1,5 +1,9 @@
 import * as net from 'node:net';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { ServiceConfig, Registry } from '../types';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Calculate port assignments for a given slot.
@@ -157,4 +161,27 @@ export function parseLsofOutput(output: string): { pid: number; command: string 
     }
   }
   return null;
+}
+
+/**
+ * Best-effort identification of the process listening on `port`. Returns
+ * `<command>[<pid>]` on darwin/linux when lsof finds a listener; returns
+ * `"unknown process"` on any failure (no listener, lsof missing, parse
+ * failure, unsupported platform). Never throws.
+ */
+export async function describeListener(port: number): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync(
+      'lsof',
+      ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-F', 'pcn'],
+      { timeout: 2000 },
+    );
+    const parsed = parseLsofOutput(stdout);
+    if (parsed) {
+      return `${parsed.command}[${parsed.pid}]`;
+    }
+  } catch {
+    // lsof returns non-zero when no match is found, or is missing entirely.
+  }
+  return 'unknown process';
 }

@@ -7,6 +7,7 @@ import {
   findUnavailableServicePorts,
   validatePortPlan,
   parseLsofOutput,
+  describeListener,
 } from '../src/core/slot-allocator';
 import type { Registry } from '../src/types';
 
@@ -146,6 +147,35 @@ describe('slot-allocator', () => {
 
     it('returns null when only a name field is present', () => {
       expect(parseLsofOutput('n*:3200\n')).toBeNull();
+    });
+  });
+
+  describe('describeListener', () => {
+    it('returns a description for a real local listener', async () => {
+      const server = net.createServer();
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        throw new Error('Expected a TCP address.');
+      }
+
+      const description = await describeListener(address.port);
+
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+
+      // Best-effort: on macOS/linux this should match `<command>[<pid>]`.
+      // On platforms without lsof we fall back to "unknown process".
+      expect(description).toMatch(/^(.+\[\d+\]|unknown process)$/);
+    });
+
+    it('returns "unknown process" when no one is listening', async () => {
+      // Port 1 is reserved/unprivileged and almost certainly free.
+      // lsof returns a non-zero exit when no match is found; we treat it
+      // as "unknown process" rather than throwing.
+      const description = await describeListener(1);
+      expect(description).toBe('unknown process');
     });
   });
 });
