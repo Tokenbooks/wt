@@ -210,6 +210,8 @@ Used with `--repair`, prints the proposed reallocation and exits without writing
 Repair preview for slot 20 (cryptoacc_wt20):
   app             5000 → 5005   in use by python3[12345]
   server          5001 (unchanged)
+  slack-bot       5010 (unchanged)
+  sync-exchanges  5002 (unchanged)
   redis           8379 (unchanged)
 
 Docker services to recreate: redis
