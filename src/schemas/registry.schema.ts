@@ -8,6 +8,7 @@ export const allocationSchema = z.object({
   docker: z.object({
     projectName: z.string().min(1),
     services: z.array(z.string().min(1)),
+    serviceHashes: z.record(z.string(), z.string()).optional(),
   }).optional(),
   ports: z.record(z.string(), z.number().int().positive()),
   createdAt: z.string().datetime(),
