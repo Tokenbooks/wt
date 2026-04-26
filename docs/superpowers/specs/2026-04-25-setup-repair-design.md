@@ -69,51 +69,112 @@ with a clear error message — there is no fresh-setup change set worth
 previewing (a fresh `wt setup` is already deterministic for a given
 config + registry state).
 
-### Idempotent plain `setup` for Docker
+### Idempotent plain `setup` for Docker via per-service hashing
+
+`wt setup` should "just work" — re-running it on a healthy worktree must
+not break running containers, and changing `dockerServices` config (image,
+command, env, etc.) must take effect on the next `wt setup` without a
+flag and without losing the worktree directory.
+
+`wt remove` is not an acceptable workaround because it deletes the
+worktree directory and any uncommitted changes in it.
+
+#### How
+
+Per-service deterministic hashing of the rendered compose entries,
+stored in the allocation. On every `wt setup`:
+
+1. Render the compose config as today (pure function of config + slot +
+   worktreePath + branchName + ports + dbName).
+2. For each service, compute `hash = sha256(JSON.stringify(serviceEntry))`,
+   truncated to a stable short form (12 hex chars). Include all rendered
+   fields — labels, env, command, image, ports, volumes — so any change
+   that would surface to the running container produces a different hash.
+3. Compare to `allocation.docker.serviceHashes` (new field).
+4. **`recreateServices`** = services whose stored hash differs from the
+   current hash. Newly-added services (not in stored hashes) also count
+   as needing creation, but the idempotent up path handles that for free.
+5. After a successful `ensureDockerServices` call, update the allocation
+   with the new hashes.
 
 `ensureDockerServices` gains an optional `recreateServices?: readonly string[]`
 parameter:
 
-- **Omitted or empty array (idempotent path):** invoke
+- **Omitted or empty (idempotent path):** invoke
   `docker compose up -d --no-recreate --remove-orphans`. `--no-recreate`
   tells compose to leave any existing container alone even if config
-  differs; only missing containers are created. Plain `wt setup` always
-  uses this path.
+  differs at Docker's own diff level; only missing containers are
+  created.
 
-- **Non-empty array (targeted recreate path, used by `--repair`):** invoke
-  two commands so port handoff is clean:
+- **Non-empty (targeted recreate path):** invoke three commands so port
+  handoff is clean:
   1. `docker compose stop <listed services>` — releases their ports.
   2. `docker compose up -d --force-recreate --no-deps <listed services>`
-     — re-creates only the named services from the latest compose config.
-  Then a final `docker compose up -d --no-recreate --remove-orphans` to
-  ensure any unchanged services that happened to have stopped are brought
-  back, and orphans are pruned.
+     — re-creates only the named services from the latest compose
+     config.
+  3. Final `docker compose up -d --no-recreate --remove-orphans` to
+     ensure any unchanged services that happened to have stopped are
+     brought back, and orphans are pruned.
 
-The set of services to recreate during repair is computed by walking
-`config.dockerServices`: a docker service needs recreate iff any of its
-`ports[*].service` references a port whose value changed in
-`portChanges`. Docker services whose mapped ports are unaffected stay
-running, untouched.
+#### Migration for existing allocations
 
-A non-port repair concern (e.g., the user changed `dockerServices`
-config but no port changed) is **out of scope** for this spec. They can
-still trigger a full recreate by `wt remove --keep-db` + `wt setup`.
+Allocations created before this change have no `serviceHashes` field.
+On the first `wt setup` after upgrade:
+
+- Treat missing `serviceHashes` as "in sync" — do NOT recreate based on
+  the comparison (we cannot know what was actually applied).
+- Compute current hashes and store them.
+- Subsequent runs use the stored hashes for diffing as normal.
+
+This means a user upgrading from v0.4.1 with an out-of-date `dockerServices`
+config will see one extra setup before changes propagate. Documented as a
+known one-time effect.
+
+#### Why this fixes the original failure
+
+The user's case: `wt setup` on slot 20 → Docker recreates redis →
+recreate fails on port-bind because the old container's port wasn't
+released. With the new path:
+
+- If redis's hash hasn't changed, `recreateServices` doesn't include it,
+  the idempotent up runs, and Docker's `--no-recreate` prevents the
+  problematic recreate path entirely.
+- If redis's hash has changed (legitimate config change), we explicitly
+  `stop redis` first, then `up --force-recreate redis`. The stop
+  releases the port before the up needs it.
 
 ### Validation
 
 | Combination                                | Result |
 |--------------------------------------------|--------|
-| `wt setup` (no flags), existing worktree   | Reuse registered ports. Docker uses the idempotent `--no-recreate` path: running services are left alone, missing ones are created. |
-| `wt setup` (no flags), no existing entry   | Fresh allocation. Docker uses the same idempotent path (no existing containers, so all are created). |
+| `wt setup` (no flags), existing worktree   | Reuse registered ports. Auto-detect compose changes via per-service hashes: if any service's hash differs, that service is stop-then-force-recreated (clean port handoff); the rest stay running via the idempotent `--no-recreate` path. |
+| `wt setup` (no flags), no existing entry   | Fresh allocation. All services are created via the idempotent up path. Hashes are stored. |
 | `wt setup --repair`, no existing entry     | Error: `--repair requires an existing worktree allocation`. |
-| `wt setup --repair`, existing entry        | Re-allocate, apply changes (or report no changes). |
+| `wt setup --repair`, existing entry        | Re-allocate ports excluding self-slot, then apply (the regular hash-diff path then naturally captures every service whose ports — or anything else — changed). |
 | `wt setup --dry-run`                       | Error: `--dry-run requires --repair`. |
-| `wt setup --repair --dry-run`              | Preview only. |
-| `wt setup --repair`, no ports change       | Print "No port changes needed" and skip env/Docker work (idempotent). |
+| `wt setup --repair --dry-run`              | Preview port changes + which docker services would be recreated. No writes. |
+| `wt setup --repair`, no ports change AND no compose change | Print "No changes needed" and skip env/Docker/registry writes (idempotent). |
 
 ## Output
 
 ### Human mode
+
+**Plain `wt setup` (no flags), nothing to do:**
+
+Existing summary unchanged. If hashes all match, no extra output.
+
+**Plain `wt setup` (no flags), docker services recreated:**
+
+Before the standard summary, an extra line per recreated service:
+
+```
+Recreating docker service 'redis' (config changed).
+Recreating docker service 'electric' (config changed).
+Worktree configured (slot 20):
+  ...
+```
+
+**`wt setup --repair` preview / apply:**
 
 ```
 Repair preview for slot 20 (cryptoacc_wt20):
@@ -125,43 +186,55 @@ Repair preview for slot 20 (cryptoacc_wt20):
   electric            5004 (unchanged)
   redis               8379 (unchanged)
 
+Docker services to recreate: redis (port changed)
+
 [dry-run] No changes written. Re-run without --dry-run to apply.
 ```
 
-When applied (no `--dry-run`), the same preview prints, then the env-patch
-and Docker steps run, and the trailing line becomes the standard
-`Worktree configured (slot 20):` summary.
+When applied (no `--dry-run`), the same preview prints, then the
+env-patch and Docker steps run, and the trailing line becomes the
+standard `Worktree configured (slot 20):` summary.
 
-When all ports are unchanged:
+When neither ports nor docker config changed:
 
 ```
-Repair check for slot 20: no port changes needed.
+Repair check for slot 20: no changes needed.
 ```
 
-(In this case, env files and Docker are NOT touched. `postSetup` is also
-skipped. Repair is a no-op when there is nothing to repair.)
+(In this case, env files and Docker are NOT touched. `postSetup` is
+also skipped. Repair is a no-op when there is nothing to repair.)
 
 ### `postSetup` interaction
 
-When repair applies real changes (any service's port changes), the
-existing `postSetup` flow runs after env-patch and Docker just like in
-fresh setup, gated by the `--install` / `--no-install` flag. The
-rationale: the user's chosen `postSetup` commands are the canonical "make
-this worktree usable again" steps; if dependencies don't need reinstalling,
-the user can pass `--no-install` (their typical default during repair).
+`postSetup` runs on every `wt setup` invocation when `--install` is set
+(today's behavior, unchanged). With auto-detection, plain `wt setup` may
+recreate docker services without any port repair; in that case
+`postSetup` still runs if `--install` is set, on the assumption that the
+user re-ran setup because they wanted the worktree refreshed.
 
-| Mode                                  | postSetup |
-|---------------------------------------|-----------|
-| `--repair --dry-run`                  | Never (no side effects in dry-run).  |
-| `--repair`, no port changes           | Skipped (nothing to repair).         |
-| `--repair`, ports changed, `--install` (default) | Runs.                  |
-| `--repair`, ports changed, `--no-install`        | Skipped.               |
+| Mode                                                            | postSetup |
+|-----------------------------------------------------------------|-----------|
+| any `--dry-run`                                                 | Never (no side effects). |
+| no changes detected (hashes match, no port repair)              | Skipped (nothing was applied). |
+| changes applied AND `--install` (default)                       | Runs. |
+| changes applied AND `--no-install`                              | Skipped. |
 
 ### JSON mode
 
-The success payload gains a `repaired: true` field and `portDrifts: PortDrift[]`
-covers any services that drifted from their natural port. A new
-`portChanges` array reports per-service repaired transitions:
+Existing payload fields are preserved. New fields:
+
+- `repaired: boolean` — `true` when invoked with `--repair`.
+- `dryRun: boolean` — `true` when invoked with `--dry-run`.
+- `portChanges: PortChange[]` — empty array on plain `setup`. On
+  `--repair`, lists per-service `{ service, from, to, reason }` for any
+  port that changed (or `unchanged` reason for clarity if needed; an
+  empty array on `--repair` means no port changes were needed).
+- `portDrifts: PortDrift[]` — drifts relative to the natural formula
+  port (existing semantic, populated only on fresh allocation or
+  `--repair`).
+- `recreatedDockerServices: string[]` — names of docker services that
+  were recreated (or would be, in dry-run mode). Empty array means
+  Docker was a no-op.
 
 ```json
 {
@@ -173,6 +246,7 @@ covers any services that drifted from their natural port. A new
     "portChanges": [
       { "service": "app", "from": 5000, "to": 5005, "reason": "in use by python3[12345]" }
     ],
+    "recreatedDockerServices": ["redis"],
     "repaired": true,
     "dryRun": false
   }
@@ -196,21 +270,28 @@ overlap.
 - `src/core/slot-allocator.ts` — add an `excludeSlot?: number` parameter
   to `allocateServicePorts`. When provided, the slot's allocation is
   filtered out of the reserved-ports map before drift kicks in.
+- `src/schemas/registry.schema.ts` — extend the docker section of the
+  allocation schema with optional `serviceHashes: Record<string, string>`.
 - `src/commands/setup.ts` — accept `repair` and `dryRun` in `SetupOptions`,
-  add validation, branch to a repair flow that calls
-  `allocateServicePorts` with `excludeSlot=slot`, computes `portChanges`
-  by comparing new vs registered, and either previews (dry-run) or writes
-  (registry update, env re-render, Docker re-apply with the changed
-  services list).
-- `src/core/docker-services.ts` — extend `EnsureDockerServicesOptions`
-  with `recreateServices?: readonly string[]`. Default invocation
-  (`--no-recreate --remove-orphans`) when omitted/empty; targeted
-  stop-then-force-recreate when populated.
+  add validation. On every setup (repair or not), compute compose hashes,
+  diff against allocation, derive `recreateServices`. For repair, also
+  compute port repair as previously specified, union the recreate sets,
+  and either preview (dry-run) or apply (registry update, env re-render,
+  Docker re-apply).
+- `src/core/docker-services.ts` —
+  - Export `computeServiceHashes(compose: DockerComposeConfig): Record<string, string>`.
+  - Extend `EnsureDockerServicesOptions` with `recreateServices?: readonly string[]`.
+  - Default invocation (`--no-recreate --remove-orphans`) when omitted/empty;
+    targeted stop-then-force-recreate-then-final-idempotent-up when
+    populated.
+  - Return the computed hashes alongside `{ projectName, services }` so
+    the caller can persist them.
 - `src/cli.ts` — add `--repair` and `--dry-run` flags to the `setup`
   command.
 - `src/commands/setup.spec.ts` — new test cases (see below).
 - `__tests__/docker-services.spec.ts` (existing) — extend with cases
-  asserting the right compose flags are passed for both modes.
+  asserting the right compose flags are passed for both modes, plus
+  hash determinism.
 
 ### Test cases (new)
 
@@ -239,6 +320,17 @@ overlap.
    `compose up -d --force-recreate --no-deps redis`, then a final
    idempotent up. (Verify via spy on the docker invocation, not by
    actually running Docker.)
+10. Hash determinism test: `computeServiceHashes` on the same compose
+    config returns identical values across runs; mutating any rendered
+    field changes the hash for the affected service only.
+11. Setup-with-hash-change test (in `setup.spec.ts`): existing allocation
+    has stored hashes; current compose generation produces a different
+    hash for `redis` only; `wt setup` (no flags) calls
+    `ensureDockerServices` with `recreateServices: ['redis']` and writes
+    the new hashes back to the registry.
+12. Setup-migration test: existing allocation has no `serviceHashes`
+    field. `wt setup` does NOT recreate any services (treats missing as
+    in-sync), but DOES populate `serviceHashes` for next time.
 
 ### Output formatting
 
