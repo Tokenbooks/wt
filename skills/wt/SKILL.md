@@ -239,6 +239,11 @@ wt setup $1
 
 Use this when a worktree was created with plain `git worktree add` instead of `wt new`.
 
+Variants:
+
+- `wt setup --repair` — re-allocate ports for an existing worktree (e.g. when one of its ports has been seized by another process). Use when `wt list` or `wt doctor` reports stale allocations and you want to keep the worktree directory intact. Do NOT use `wt remove` for this — it deletes the worktree directory and uncommitted work. Repair preserves the directory, database, and untouched ports.
+- `wt setup --repair --dry-run` — preview the reallocation without applying. Prints the proposed port changes and which docker services will be recreated.
+
 ---
 
 ### No arguments or unrecognized command
