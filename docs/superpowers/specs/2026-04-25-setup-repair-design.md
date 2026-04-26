@@ -1,8 +1,10 @@
-# `wt setup --repair` and `--dry-run`
+# `wt setup --repair`, `--dry-run`, and idempotent Docker
 
 ## Problem
 
-A worktree allocation in the registry can become out of sync with reality:
+Two related issues hit the same code path on `wt setup`:
+
+### 1. A worktree allocation can drift out of sync with reality
 
 - The allocation pre-dates port-drift (v0.4.1) and recorded purely formula
   ports; one of those ports is now externally occupied.
@@ -16,8 +18,25 @@ reuses the registered values verbatim. There is no way to ask wt to refresh
 the allocation against current OS/registry state without removing and
 recreating the whole worktree.
 
-Users need a way to repair a worktree's port allocation in place, with a
-preview so they can see what would change before committing to it.
+### 2. Plain `wt setup` is not idempotent for Docker
+
+`ensureDockerServices` currently invokes `docker compose up -d
+--remove-orphans` with default recreate semantics: if compose config
+differs from the running state, the affected service is recreated. Even
+trivial generation differences (or upgrading to a wt version with subtly
+different label/env output) cause a recreate. Worse, Docker occasionally
+fumbles port handoff during recreation — the new container tries to bind
+before the old one's port is released, producing:
+
+```
+Bind for 127.0.0.1:8379 failed: port is already allocated
+```
+
+Re-running an unchanged `wt setup` should never break a running worktree.
+
+Users need a way to repair a worktree's port allocation in place (with a
+preview so they can see what would change before committing) AND running
+plain `wt setup` should be safe to repeat on a healthy worktree.
 
 ## Solution
 
@@ -50,12 +69,42 @@ with a clear error message — there is no fresh-setup change set worth
 previewing (a fresh `wt setup` is already deterministic for a given
 config + registry state).
 
+### Idempotent plain `setup` for Docker
+
+`ensureDockerServices` gains an optional `recreateServices?: readonly string[]`
+parameter:
+
+- **Omitted or empty array (idempotent path):** invoke
+  `docker compose up -d --no-recreate --remove-orphans`. `--no-recreate`
+  tells compose to leave any existing container alone even if config
+  differs; only missing containers are created. Plain `wt setup` always
+  uses this path.
+
+- **Non-empty array (targeted recreate path, used by `--repair`):** invoke
+  two commands so port handoff is clean:
+  1. `docker compose stop <listed services>` — releases their ports.
+  2. `docker compose up -d --force-recreate --no-deps <listed services>`
+     — re-creates only the named services from the latest compose config.
+  Then a final `docker compose up -d --no-recreate --remove-orphans` to
+  ensure any unchanged services that happened to have stopped are brought
+  back, and orphans are pruned.
+
+The set of services to recreate during repair is computed by walking
+`config.dockerServices`: a docker service needs recreate iff any of its
+`ports[*].service` references a port whose value changed in
+`portChanges`. Docker services whose mapped ports are unaffected stay
+running, untouched.
+
+A non-port repair concern (e.g., the user changed `dockerServices`
+config but no port changed) is **out of scope** for this spec. They can
+still trigger a full recreate by `wt remove --keep-db` + `wt setup`.
+
 ### Validation
 
 | Combination                                | Result |
 |--------------------------------------------|--------|
-| `wt setup` (no flags), existing worktree   | Reuse registered ports (current behavior, unchanged). |
-| `wt setup` (no flags), no existing entry   | Fresh allocation (current behavior, unchanged). |
+| `wt setup` (no flags), existing worktree   | Reuse registered ports. Docker uses the idempotent `--no-recreate` path: running services are left alone, missing ones are created. |
+| `wt setup` (no flags), no existing entry   | Fresh allocation. Docker uses the same idempotent path (no existing containers, so all are created). |
 | `wt setup --repair`, no existing entry     | Error: `--repair requires an existing worktree allocation`. |
 | `wt setup --repair`, existing entry        | Re-allocate, apply changes (or report no changes). |
 | `wt setup --dry-run`                       | Error: `--dry-run requires --repair`. |
@@ -151,10 +200,17 @@ overlap.
   add validation, branch to a repair flow that calls
   `allocateServicePorts` with `excludeSlot=slot`, computes `portChanges`
   by comparing new vs registered, and either previews (dry-run) or writes
-  (registry update, env re-render, Docker re-apply).
+  (registry update, env re-render, Docker re-apply with the changed
+  services list).
+- `src/core/docker-services.ts` — extend `EnsureDockerServicesOptions`
+  with `recreateServices?: readonly string[]`. Default invocation
+  (`--no-recreate --remove-orphans`) when omitted/empty; targeted
+  stop-then-force-recreate when populated.
 - `src/cli.ts` — add `--repair` and `--dry-run` flags to the `setup`
   command.
 - `src/commands/setup.spec.ts` — new test cases (see below).
+- `__tests__/docker-services.spec.ts` (existing) — extend with cases
+  asserting the right compose flags are passed for both modes.
 
 ### Test cases (new)
 
@@ -175,6 +231,14 @@ overlap.
    slot's own registered ports in the registry, calling
    `allocateServicePorts` with `excludeSlot=slot` ignores them and treats
    the natural ports as candidate.
+8. Docker idempotence test (in `__tests__/docker-services.spec.ts`):
+   `ensureDockerServices` without `recreateServices` invokes compose with
+   `--no-recreate --remove-orphans`.
+9. Docker targeted-recreate test: `ensureDockerServices` with
+   `recreateServices: ['redis']` invokes `compose stop redis`, then
+   `compose up -d --force-recreate --no-deps redis`, then a final
+   idempotent up. (Verify via spy on the docker invocation, not by
+   actually running Docker.)
 
 ### Output formatting
 
