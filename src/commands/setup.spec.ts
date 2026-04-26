@@ -364,6 +364,7 @@ describe('setup command', () => {
     );
     expect(mockEnsureDockerServices).toHaveBeenCalled();
     expect(mockWriteRegistry).toHaveBeenCalled();
+    expect(mockCopyAndPatchAllEnvFiles).toHaveBeenCalled();
   });
 
   it('--repair --dry-run does not call writeRegistry, env-patch, or ensureDockerServices', async () => {
@@ -424,6 +425,31 @@ describe('setup command', () => {
     };
     expect(payload.success).toBe(false);
     expect(payload.error.code).toBe('INVALID_OPTIONS');
+  });
+
+  it('--repair reports "natural port now free" when a previously-drifted port reverts', async () => {
+    const allocation: Allocation = {
+      worktreePath: worktreeDir,
+      branchName: 'feat/auth',
+      dbName: 'myapp_wt2',
+      docker: { projectName: 'wt-2-myapp', services: [], serviceHashes: {} },
+      ports: { web: 3207 }, // previously drifted from natural 3200
+      createdAt: '2026-04-25T00:00:00.000Z',
+    };
+    mockFindByPath.mockReturnValue([2, allocation]);
+    // The natural port is now free → allocator returns 3200 with no drift entry.
+    mockAllocateServicePorts.mockResolvedValue({ ports: { web: 3200 }, drifts: [] });
+    mockComputeServiceHashes.mockReturnValue({});
+    mockEnsureDockerServices.mockReturnValue({ projectName: 'wt-2-myapp', services: [], serviceHashes: {} });
+
+    await setupCommand(worktreeDir, setupOpts({ repair: true, dryRun: true, json: true }));
+
+    const payload = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] ?? 'null') as {
+      data: { portChanges: Array<{ service: string; registered: number; proposed: number; reason: string }> };
+    };
+    expect(payload.data.portChanges).toEqual([
+      { service: 'web', registered: 3207, proposed: 3200, reason: 'natural port now free' },
+    ]);
   });
 
   it('--repair with no port or compose changes is idempotent and does not write', async () => {

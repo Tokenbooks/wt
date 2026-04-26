@@ -272,7 +272,7 @@ export async function setupCommand(
                 ports,
                 portDrifts,
                 portChanges,
-                recreatedDockerServices: options.dryRun ? recreateServices : [],
+                recreatedDockerServices: recreateServices,
                 repaired: true,
                 dryRun: options.dryRun,
               }),
