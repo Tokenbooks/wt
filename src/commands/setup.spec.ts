@@ -28,6 +28,8 @@ jest.mock('../core/database', () => ({
 
 jest.mock('../core/docker-services', () => ({
   ensureDockerServices: jest.fn(),
+  buildDockerComposeConfig: jest.fn(),
+  computeServiceHashes: jest.fn(),
 }));
 
 jest.mock('../core/git', () => ({
@@ -44,7 +46,11 @@ import {
 } from '../core/slot-allocator';
 import { copyAndPatchAllEnvFiles } from '../core/env-patcher';
 import { createDatabase, databaseExists } from '../core/database';
-import { ensureDockerServices } from '../core/docker-services';
+import {
+  ensureDockerServices,
+  buildDockerComposeConfig,
+  computeServiceHashes,
+} from '../core/docker-services';
 import { getMainWorktreePath, isMainWorktree, getBranchName } from '../core/git';
 import { setupCommand } from './setup';
 import type { Allocation, WtConfig } from '../types';
@@ -64,6 +70,12 @@ const mockCreateDatabase = createDatabase as jest.MockedFunction<typeof createDa
 const mockDatabaseExists = databaseExists as jest.MockedFunction<typeof databaseExists>;
 const mockEnsureDockerServices = ensureDockerServices as jest.MockedFunction<
   typeof ensureDockerServices
+>;
+const mockBuildDockerComposeConfig = buildDockerComposeConfig as jest.MockedFunction<
+  typeof buildDockerComposeConfig
+>;
+const mockComputeServiceHashes = computeServiceHashes as jest.MockedFunction<
+  typeof computeServiceHashes
 >;
 const mockGetMainWorktreePath = getMainWorktreePath as jest.MockedFunction<typeof getMainWorktreePath>;
 const mockIsMainWorktree = isMainWorktree as jest.MockedFunction<typeof isMainWorktree>;
@@ -112,6 +124,8 @@ describe('setup command', () => {
     mockCalculateDbName.mockReturnValue('myapp_wt2');
     mockDatabaseExists.mockResolvedValue(true);
     mockCreateDatabase.mockResolvedValue();
+    mockBuildDockerComposeConfig.mockReturnValue({ services: {} });
+    mockComputeServiceHashes.mockReturnValue({});
     mockEnsureDockerServices.mockReturnValue({ projectName: 'wt-2-myapp', services: [], serviceHashes: {} });
     mockAddAllocation.mockImplementation((registry, slot, allocation) => ({
       ...registry,
@@ -204,5 +218,104 @@ describe('setup command', () => {
     };
     expect(payload.data.ports).toEqual({ web: 3207 });
     expect(payload.data.portDrifts).toEqual([]);
+  });
+
+  it('auto-detects compose changes and recreates only the affected service', async () => {
+    const dockerConfig: WtConfig = {
+      ...config,
+      services: [{ name: 'redis', defaultPort: 6379 }, { name: 'electric', defaultPort: 3004 }],
+      dockerServices: [
+        { name: 'redis', image: 'redis:8-alpine', restart: 'unless-stopped', ports: [], environment: {}, command: [], volumes: [], extraHosts: [] },
+        { name: 'electric', image: 'electric:1', restart: 'unless-stopped', ports: [], environment: {}, command: [], volumes: [], extraHosts: [] },
+      ],
+    };
+    fs.writeFileSync(path.join(tmpDir, 'wt.config.json'), JSON.stringify(dockerConfig), 'utf-8');
+
+    const allocation: Allocation = {
+      worktreePath: worktreeDir,
+      branchName: 'feat/auth',
+      dbName: 'myapp_wt2',
+      docker: {
+        projectName: 'wt-2-myapp',
+        services: ['redis', 'electric'],
+        serviceHashes: { redis: 'OLDHASH', electric: 'electrichash' },
+      },
+      ports: { redis: 6479, electric: 3104 },
+      createdAt: '2026-04-25T00:00:00.000Z',
+    };
+    mockFindByPath.mockReturnValue([2, allocation]);
+    mockComputeServiceHashes.mockReturnValue({ redis: 'NEWHASH', electric: 'electrichash' });
+    mockEnsureDockerServices.mockReturnValue({
+      projectName: 'wt-2-myapp',
+      services: ['redis', 'electric'],
+      serviceHashes: { redis: 'NEWHASH', electric: 'electrichash' },
+    });
+
+    await setupCommand(worktreeDir, { json: true, install: false });
+
+    expect(mockEnsureDockerServices).toHaveBeenCalledWith(
+      expect.objectContaining({ recreateServices: ['redis'] }),
+    );
+    expect(mockWriteRegistry).toHaveBeenCalledWith(
+      tmpDir,
+      expect.objectContaining({
+        allocations: expect.objectContaining({
+          '2': expect.objectContaining({
+            docker: expect.objectContaining({
+              serviceHashes: { redis: 'NEWHASH', electric: 'electrichash' },
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('treats missing serviceHashes as in-sync on first run after upgrade', async () => {
+    const dockerConfig: WtConfig = {
+      ...config,
+      services: [{ name: 'redis', defaultPort: 6379 }],
+      dockerServices: [
+        { name: 'redis', image: 'redis:8-alpine', restart: 'unless-stopped', ports: [], environment: {}, command: [], volumes: [], extraHosts: [] },
+      ],
+    };
+    fs.writeFileSync(path.join(tmpDir, 'wt.config.json'), JSON.stringify(dockerConfig), 'utf-8');
+
+    const allocation: Allocation = {
+      worktreePath: worktreeDir,
+      branchName: 'feat/auth',
+      dbName: 'myapp_wt2',
+      docker: {
+        projectName: 'wt-2-myapp',
+        services: ['redis'],
+        // no serviceHashes — pre-upgrade allocation
+      },
+      ports: { redis: 6479 },
+      createdAt: '2026-04-25T00:00:00.000Z',
+    };
+    mockFindByPath.mockReturnValue([2, allocation]);
+    mockComputeServiceHashes.mockReturnValue({ redis: 'CURRENT' });
+    mockEnsureDockerServices.mockReturnValue({
+      projectName: 'wt-2-myapp',
+      services: ['redis'],
+      serviceHashes: { redis: 'CURRENT' },
+    });
+
+    await setupCommand(worktreeDir, { json: true, install: false });
+
+    expect(mockEnsureDockerServices).toHaveBeenCalledWith(
+      expect.objectContaining({ recreateServices: [] }),
+    );
+    expect(mockWriteRegistry).toHaveBeenCalledWith(
+      tmpDir,
+      expect.objectContaining({
+        allocations: expect.objectContaining({
+          '2': expect.objectContaining({
+            docker: expect.objectContaining({
+              serviceHashes: { redis: 'CURRENT' },
+            }),
+          }),
+        }),
+      }),
+    );
   });
 });

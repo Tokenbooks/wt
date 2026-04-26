@@ -13,6 +13,8 @@ import { copyAndPatchAllEnvFiles } from '../core/env-patcher';
 import { createDatabase, databaseExists } from '../core/database';
 import {
   ensureDockerServices,
+  buildDockerComposeConfig,
+  computeServiceHashes,
 } from '../core/docker-services';
 import { getMainWorktreePath, isMainWorktree, getBranchName } from '../core/git';
 import { extractErrorMessage, formatJson, formatSetupSummary, success, error } from '../output';
@@ -166,6 +168,29 @@ export async function setupCommand(
       await createDatabase(databaseUrl, config.baseDatabaseName, dbName);
     }
 
+    // Compute current compose hashes and diff against stored ones to
+    // decide which docker services need recreation. Missing stored
+    // hashes (pre-upgrade allocation) are treated as in-sync — we don't
+    // know what was actually applied, so we don't recreate anything;
+    // we simply store the current hashes and the next config edit will
+    // be detected normally.
+    const composeConfig = buildDockerComposeConfig({
+      mainRoot,
+      slot,
+      branchName,
+      worktreePath,
+      dbName,
+      ports,
+      config,
+    });
+    const currentHashes = computeServiceHashes(composeConfig);
+    const storedHashes = existing?.[1].docker?.serviceHashes;
+    const recreateServices = storedHashes
+      ? Object.entries(currentHashes)
+          .filter(([name, hash]) => storedHashes[name] !== undefined && storedHashes[name] !== hash)
+          .map(([name]) => name)
+      : [];
+
     const docker = ensureDockerServices({
       mainRoot,
       slot,
@@ -174,6 +199,7 @@ export async function setupCommand(
       dbName,
       ports,
       config,
+      recreateServices,
     });
 
     // Copy and patch env files
