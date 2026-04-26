@@ -40,10 +40,14 @@ program
   .argument('[path]', 'Worktree path (default: current directory)')
   .option('--no-install', 'Skip post-setup commands')
   .option('--json', 'Output as JSON', false)
+  .option('--repair', 're-allocate ports for an existing worktree, treating its own current ports as not-reserved', false)
+  .option('--dry-run', 'preview what --repair would change without writing', false)
   .action(async (targetPath: string | undefined, opts) => {
     await setupCommand(targetPath, {
       json: opts.json,
       install: opts.install,
+      repair: opts.repair,
+      dryRun: opts.dryRun,
     });
   });
 
