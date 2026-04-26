@@ -1,5 +1,5 @@
 import * as crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import * as child_process from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -16,11 +16,17 @@ export interface EnsureDockerServicesOptions {
   readonly ports: Record<string, number>;
   readonly config: WtConfig;
   readonly log?: (message: string) => void;
+  /**
+   * Names of docker services to stop-and-force-recreate. When omitted or
+   * empty, only missing containers are created (`--no-recreate`).
+   */
+  readonly recreateServices?: readonly string[];
 }
 
 export interface DockerServicesAllocation {
   readonly projectName: string;
   readonly services: string[];
+  readonly serviceHashes: Record<string, string>;
 }
 
 export interface ManagedDockerProjectSummary {
@@ -100,7 +106,7 @@ function repoHash(mainRoot: string): string {
 
 function runDocker(args: readonly string[]): string {
   try {
-    return execFileSync('docker', args, {
+    return child_process.execFileSync('docker', args, {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
@@ -287,10 +293,39 @@ export function ensureDockerServices(
   const compose = buildDockerComposeConfig(options);
   const filePath = writeComposeFile(projectName, compose);
 
-  runDocker(['compose', '-f', filePath, '-p', projectName, 'up', '-d', '--remove-orphans']);
+  const serviceHashes = computeServiceHashes(compose);
+
+  const recreate = options.recreateServices ?? [];
+  if (recreate.length > 0) {
+    runDocker(['compose', '-f', filePath, '-p', projectName, 'stop', ...recreate]);
+    runDocker([
+      'compose',
+      '-f',
+      filePath,
+      '-p',
+      projectName,
+      'up',
+      '-d',
+      '--force-recreate',
+      '--no-deps',
+      ...recreate,
+    ]);
+  }
+  runDocker([
+    'compose',
+    '-f',
+    filePath,
+    '-p',
+    projectName,
+    'up',
+    '-d',
+    '--no-recreate',
+    '--remove-orphans',
+  ]);
+
   const services = options.config.dockerServices.map((service) => service.name);
   options.log?.(`Started Docker project '${projectName}' (${services.join(', ')}).`);
-  return { projectName, services };
+  return { projectName, services, serviceHashes };
 }
 
 function listDockerResourceIds(args: readonly string[]): string[] {

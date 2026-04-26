@@ -112,7 +112,7 @@ describe('setup command', () => {
     mockCalculateDbName.mockReturnValue('myapp_wt2');
     mockDatabaseExists.mockResolvedValue(true);
     mockCreateDatabase.mockResolvedValue();
-    mockEnsureDockerServices.mockReturnValue({ projectName: 'wt-2-myapp', services: [] });
+    mockEnsureDockerServices.mockReturnValue({ projectName: 'wt-2-myapp', services: [], serviceHashes: {} });
     mockAddAllocation.mockImplementation((registry, slot, allocation) => ({
       ...registry,
       allocations: { ...registry.allocations, [String(slot)]: allocation },

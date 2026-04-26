@@ -1,11 +1,15 @@
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import * as child_process from 'node:child_process';
 import {
   buildDockerComposeConfig,
   computeServiceHashes,
+  ensureDockerServices,
   getDockerProjectName,
   usesDockerServices,
 } from '../src/core/docker-services';
 import type { WtConfig } from '../src/types';
+
+jest.mock('node:child_process');
 
 describe('docker-services', () => {
   const config: WtConfig = {
@@ -134,5 +138,85 @@ describe('docker-services', () => {
 
       expect(computeServiceHashes(original).redis).not.toBe(computeServiceHashes(portChanged).redis);
     });
+  });
+});
+
+describe('ensureDockerServices invocation', () => {
+  let calls: string[][] = [];
+
+  beforeEach(() => {
+    calls = [];
+    jest.mocked(child_process.execFileSync).mockImplementation((_cmd, args) => {
+      calls.push([...(args as string[])]);
+      return '';
+    });
+  });
+
+  afterEach(() => {
+    jest.resetAllMocks();
+  });
+
+  const config: WtConfig = {
+    baseDatabaseName: 'cryptoacc',
+    baseWorktreePath: '.worktrees',
+    portStride: 100,
+    maxSlots: 25,
+    services: [{ name: 'redis', defaultPort: 6379 }],
+    dockerServices: [
+      {
+        name: 'redis',
+        image: 'redis:8-alpine',
+        restart: 'unless-stopped',
+        ports: [{ service: 'redis', target: 6379, host: '127.0.0.1' }],
+        environment: {},
+        command: ['redis-server'],
+        volumes: [],
+        extraHosts: [],
+      },
+    ],
+    envFiles: [],
+    postSetup: [],
+    autoInstall: true,
+  };
+
+  function runEnsure(extra: { recreateServices?: readonly string[] } = {}) {
+    return ensureDockerServices({
+      mainRoot: '/Users/dev/My Project',
+      slot: 3,
+      branchName: 'feat/x',
+      worktreePath: '/Users/dev/My Project/.worktrees/x',
+      dbName: 'cryptoacc_wt3',
+      ports: { redis: 6679 },
+      config,
+      ...extra,
+    });
+  }
+
+  it('uses the idempotent up path when recreateServices is omitted', () => {
+    const result = runEnsure();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual(expect.arrayContaining(['compose', 'up', '-d', '--no-recreate', '--remove-orphans']));
+    expect(result?.serviceHashes).toBeDefined();
+    expect(Object.keys(result?.serviceHashes ?? {})).toEqual(['redis']);
+  });
+
+  it('uses the idempotent up path when recreateServices is empty', () => {
+    runEnsure({ recreateServices: [] });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual(expect.arrayContaining(['--no-recreate', '--remove-orphans']));
+  });
+
+  it('does targeted stop+force-recreate then a final idempotent up when recreateServices is non-empty', () => {
+    runEnsure({ recreateServices: ['redis'] });
+
+    expect(calls).toHaveLength(3);
+    // 1. stop
+    expect(calls[0]).toEqual(expect.arrayContaining(['compose', 'stop', 'redis']));
+    // 2. force-recreate, no-deps, only the listed services
+    expect(calls[1]).toEqual(expect.arrayContaining(['compose', 'up', '-d', '--force-recreate', '--no-deps', 'redis']));
+    // 3. final idempotent up to bring back unchanged services and prune orphans
+    expect(calls[2]).toEqual(expect.arrayContaining(['compose', 'up', '-d', '--no-recreate', '--remove-orphans']));
   });
 });
