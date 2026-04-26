@@ -288,6 +288,29 @@ describe('slot-allocator', () => {
         allocateServicePorts(0, edgeServices, 0, registry),
       ).rejects.toThrow(/No available port for service 'edge'/);
     });
+
+    it('treats the excluded slot\'s registered ports as not reserved', async () => {
+      // Slot 2's registered ports include 3200 (web). Without excludeSlot
+      // we'd see this as an internal conflict and drift; with
+      // excludeSlot=2 we ignore it and treat 3200 as available.
+      const registry: Registry = {
+        version: 1,
+        allocations: {
+          '2': {
+            worktreePath: '/tmp/wt2',
+            branchName: 'feat/own',
+            dbName: 'db_wt2',
+            ports: { web: 3200, api: 4200 },
+            createdAt: '2026-04-25T00:00:00.000Z',
+          },
+        },
+      };
+
+      const result = await allocateServicePorts(2, services, stride, registry, { excludeSlot: 2 });
+
+      expect(result.ports).toEqual({ web: 3200, api: 4200 });
+      expect(result.drifts).toEqual([]);
+    });
   });
 });
 

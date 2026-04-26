@@ -80,6 +80,10 @@ async function isPortAvailable(port: number): Promise<boolean> {
   });
 }
 
+export interface AllocateServicePortsOptions {
+  readonly excludeSlot?: number;
+}
+
 /**
  * Allocate ports for each service in the slot, drifting forward by 1 past
  * any port that is either already bound at the OS level or already in use
@@ -98,12 +102,16 @@ export async function allocateServicePorts(
   services: readonly ServiceConfig[],
   stride: number,
   registry: Registry,
+  options: AllocateServicePortsOptions = {},
 ): Promise<AllocatedPorts> {
   // Build a map: port -> { slot, service } for every port already in the
   // registry across all allocations.
   const reserved = new Map<number, { slot: number; service: string }>();
   for (const [slotStr, allocation] of Object.entries(registry.allocations)) {
     const owningSlot = Number(slotStr);
+    if (options.excludeSlot !== undefined && owningSlot === options.excludeSlot) {
+      continue;
+    }
     for (const [serviceName, port] of Object.entries(allocation.ports)) {
       reserved.set(port, { slot: owningSlot, service: serviceName });
     }
