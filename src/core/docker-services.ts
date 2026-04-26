@@ -1,4 +1,7 @@
 import * as crypto from 'node:crypto';
+// Namespace import required: jest.mock('node:child_process') replaces the
+// module object's properties at runtime; a named destructured import would
+// bypass the mock and the invocation tests would actually shell out.
 import * as child_process from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';

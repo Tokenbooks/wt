@@ -196,7 +196,19 @@ describe('ensureDockerServices invocation', () => {
     const result = runEnsure();
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual(expect.arrayContaining(['compose', 'up', '-d', '--no-recreate', '--remove-orphans']));
+    expect(calls[0]).toEqual(
+      expect.arrayContaining([
+        'compose',
+        '-f',
+        expect.stringContaining('compose.json'),
+        '-p',
+        expect.stringContaining('wt-3-'),
+        'up',
+        '-d',
+        '--no-recreate',
+        '--remove-orphans',
+      ]),
+    );
     expect(result?.serviceHashes).toBeDefined();
     expect(Object.keys(result?.serviceHashes ?? {})).toEqual(['redis']);
   });
@@ -205,7 +217,16 @@ describe('ensureDockerServices invocation', () => {
     runEnsure({ recreateServices: [] });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual(expect.arrayContaining(['--no-recreate', '--remove-orphans']));
+    expect(calls[0]).toEqual(
+      expect.arrayContaining([
+        '-f',
+        expect.stringContaining('compose.json'),
+        '-p',
+        expect.stringContaining('wt-3-'),
+        '--no-recreate',
+        '--remove-orphans',
+      ]),
+    );
   });
 
   it('does targeted stop+force-recreate then a final idempotent up when recreateServices is non-empty', () => {
@@ -213,10 +234,45 @@ describe('ensureDockerServices invocation', () => {
 
     expect(calls).toHaveLength(3);
     // 1. stop
-    expect(calls[0]).toEqual(expect.arrayContaining(['compose', 'stop', 'redis']));
+    expect(calls[0]).toEqual(
+      expect.arrayContaining([
+        'compose',
+        '-f',
+        expect.stringContaining('compose.json'),
+        '-p',
+        expect.stringContaining('wt-3-'),
+        'stop',
+        'redis',
+      ]),
+    );
     // 2. force-recreate, no-deps, only the listed services
-    expect(calls[1]).toEqual(expect.arrayContaining(['compose', 'up', '-d', '--force-recreate', '--no-deps', 'redis']));
+    expect(calls[1]).toEqual(
+      expect.arrayContaining([
+        'compose',
+        '-f',
+        expect.stringContaining('compose.json'),
+        '-p',
+        expect.stringContaining('wt-3-'),
+        'up',
+        '-d',
+        '--force-recreate',
+        '--no-deps',
+        'redis',
+      ]),
+    );
     // 3. final idempotent up to bring back unchanged services and prune orphans
-    expect(calls[2]).toEqual(expect.arrayContaining(['compose', 'up', '-d', '--no-recreate', '--remove-orphans']));
+    expect(calls[2]).toEqual(
+      expect.arrayContaining([
+        'compose',
+        '-f',
+        expect.stringContaining('compose.json'),
+        '-p',
+        expect.stringContaining('wt-3-'),
+        'up',
+        '-d',
+        '--no-recreate',
+        '--remove-orphans',
+      ]),
+    );
   });
 });
