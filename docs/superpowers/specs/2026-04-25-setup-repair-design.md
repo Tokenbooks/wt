@@ -226,7 +226,7 @@ Existing payload fields are preserved. New fields:
 - `repaired: boolean` — `true` when invoked with `--repair`.
 - `dryRun: boolean` — `true` when invoked with `--dry-run`.
 - `portChanges: PortChange[]` — empty array on plain `setup`. On
-  `--repair`, lists per-service `{ service, from, to, reason }` for any
+  `--repair`, lists per-service `{ service, registered, proposed, reason }` for any
   port that changed (or `unchanged` reason for clarity if needed; an
   empty array on `--repair` means no port changes were needed).
 - `portDrifts: PortDrift[]` — drifts relative to the natural formula
@@ -244,7 +244,7 @@ Existing payload fields are preserved. New fields:
     "...": "...",
     "portDrifts": [...],
     "portChanges": [
-      { "service": "app", "from": 5000, "to": 5005, "reason": "in use by python3[12345]" }
+      { "service": "app", "registered": 5000, "proposed": 5005, "reason": "in use by python3[12345]" }
     ],
     "recreatedDockerServices": ["redis"],
     "repaired": true,
