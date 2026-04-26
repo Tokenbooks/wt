@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
 import {
   buildDockerComposeConfig,
+  computeServiceHashes,
   getDockerProjectName,
   usesDockerServices,
 } from '../src/core/docker-services';
@@ -89,6 +90,49 @@ describe('docker-services', () => {
         ELECTRIC_PORT: '3304',
       },
       extra_hosts: ['host.docker.internal:host-gateway'],
+    });
+  });
+
+  describe('computeServiceHashes', () => {
+    function configWithRedis(): WtConfig {
+      return {
+        ...config,
+        dockerServices: [config.dockerServices[0]!], // redis only
+      };
+    }
+
+    function buildOptions(overrides: Partial<{ ports: Record<string, number>; branchName: string }> = {}) {
+      return {
+        mainRoot: '/Users/dev/My Project',
+        slot: 3,
+        branchName: overrides.branchName ?? 'feat/electric',
+        worktreePath: '/Users/dev/My Project/.worktrees/feat-electric',
+        dbName: 'cryptoacc_wt3',
+        ports: overrides.ports ?? { electric: 3304, redis: 6679 },
+        config: configWithRedis(),
+      };
+    }
+
+    it('returns one hash per docker service', () => {
+      const compose = buildDockerComposeConfig(buildOptions());
+      const hashes = computeServiceHashes(compose);
+
+      expect(Object.keys(hashes)).toEqual(['redis']);
+      expect(hashes.redis).toMatch(/^[a-f0-9]{12}$/);
+    });
+
+    it('produces identical hashes for identical compose configs', () => {
+      const a = buildDockerComposeConfig(buildOptions());
+      const b = buildDockerComposeConfig(buildOptions());
+
+      expect(computeServiceHashes(a)).toEqual(computeServiceHashes(b));
+    });
+
+    it('produces different hashes when the rendered service differs', () => {
+      const original = buildDockerComposeConfig(buildOptions());
+      const portChanged = buildDockerComposeConfig(buildOptions({ ports: { electric: 3304, redis: 6699 } }));
+
+      expect(computeServiceHashes(original).redis).not.toBe(computeServiceHashes(portChanged).redis);
     });
   });
 });

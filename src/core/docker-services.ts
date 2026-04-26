@@ -54,6 +54,24 @@ export interface DockerComposeConfig {
   readonly services: Record<string, DockerComposeService>;
 }
 
+/**
+ * Compute a stable per-service hash of the rendered compose config. Used
+ * by `wt setup` to detect which services have a changed configuration
+ * and need to be recreated. The hash includes every rendered field
+ * (image, labels, ports, environment, command, volumes, extra_hosts) so
+ * any user-visible config change produces a new hash.
+ */
+export function computeServiceHashes(
+  compose: DockerComposeConfig,
+): Record<string, string> {
+  const hashes: Record<string, string> = {};
+  for (const [name, service] of Object.entries(compose.services)) {
+    const json = JSON.stringify(service);
+    hashes[name] = crypto.createHash('sha256').update(json).digest('hex').slice(0, 12);
+  }
+  return hashes;
+}
+
 interface DockerRenderContext {
   readonly mainRoot: string;
   readonly slot: number;
