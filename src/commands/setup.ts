@@ -13,14 +13,18 @@ import { copyAndPatchAllEnvFiles } from '../core/env-patcher';
 import { createDatabase, databaseExists } from '../core/database';
 import {
   ensureDockerServices,
+  buildDockerComposeConfig,
+  computeServiceHashes,
 } from '../core/docker-services';
 import { getMainWorktreePath, isMainWorktree, getBranchName } from '../core/git';
-import { extractErrorMessage, formatJson, formatSetupSummary, success, error } from '../output';
-import type { Allocation, PortDrift, WtConfig } from '../types';
+import { extractErrorMessage, formatJson, formatRepairPreview, formatSetupSummary, success, error } from '../output';
+import type { Allocation, PortChange, PortDrift, WtConfig } from '../types';
 
 interface SetupOptions {
   readonly json: boolean;
   readonly install: boolean;
+  readonly repair: boolean;
+  readonly dryRun: boolean;
 }
 
 function validateConfig(config: WtConfig): WtConfig {
@@ -103,6 +107,18 @@ export async function setupCommand(
       return;
     }
 
+    // Flag validation.
+    if (options.dryRun && !options.repair) {
+      const msg = '--dry-run requires --repair.';
+      if (options.json) {
+        console.log(formatJson(error('INVALID_OPTIONS', msg)));
+      } else {
+        console.error(msg);
+      }
+      process.exitCode = 1;
+      return;
+    }
+
     const config = loadConfig(mainRoot);
     let registry = readRegistry(mainRoot);
 
@@ -111,14 +127,38 @@ export async function setupCommand(
     // re-runs of `wt setup` don't overwrite drifted ports with formula
     // values.
     const existing = findByPath(registry, worktreePath);
+
+    if (options.repair && !existing) {
+      const msg = '--repair requires an existing worktree allocation; remove --repair to set up fresh.';
+      if (options.json) {
+        console.log(formatJson(error('NO_ALLOCATION', msg)));
+      } else {
+        console.error(msg);
+      }
+      process.exitCode = 1;
+      return;
+    }
+
     let slot: number;
     let ports: Record<string, number>;
     let portDrifts: readonly PortDrift[];
 
     if (existing) {
       slot = existing[0];
-      ports = existing[1].ports;
-      portDrifts = [];
+      if (options.repair) {
+        const allocated = await allocateServicePorts(
+          slot,
+          config.services,
+          config.portStride,
+          registry,
+          { excludeSlot: slot },
+        );
+        ports = allocated.ports;
+        portDrifts = allocated.drifts;
+      } else {
+        ports = existing[1].ports;
+        portDrifts = [];
+      }
     } else {
       const available = findAvailableSlot(registry, config.maxSlots);
       if (available === null) {
@@ -166,6 +206,83 @@ export async function setupCommand(
       await createDatabase(databaseUrl, config.baseDatabaseName, dbName);
     }
 
+    // Compute current compose hashes and diff against stored ones to
+    // decide which docker services need recreation. Missing stored
+    // hashes (pre-upgrade allocation) are treated as in-sync — we don't
+    // know what was actually applied, so we don't recreate anything;
+    // we simply store the current hashes and the next config edit will
+    // be detected normally.
+    const composeConfig = buildDockerComposeConfig({
+      mainRoot,
+      slot,
+      branchName,
+      worktreePath,
+      dbName,
+      ports,
+      config,
+    });
+    const currentHashes = computeServiceHashes(composeConfig);
+    const storedHashes = existing?.[1].docker?.serviceHashes;
+    const recreateServices = storedHashes
+      ? Object.entries(currentHashes)
+          .filter(([name, hash]) => storedHashes[name] !== undefined && storedHashes[name] !== hash)
+          .map(([name]) => name)
+      : [];
+
+    // Compute portChanges (registered → proposed) for repair output.
+    const portChanges: PortChange[] = options.repair && existing
+      ? config.services.map((service) => {
+          const registered = existing[1].ports[service.name] ?? 0;
+          const proposed = ports[service.name] ?? 0;
+          if (registered === proposed) {
+            return { service: service.name, registered, proposed, reason: 'unchanged' };
+          }
+          const drift = portDrifts.find((d) => d.service === service.name);
+          if (drift) {
+            const reason = drift.conflict.kind === 'os'
+              ? `in use by ${drift.conflict.description}`
+              : `reserved by slot ${drift.conflict.slot} (${drift.conflict.service})`;
+            return { service: service.name, registered, proposed, reason };
+          }
+          return { service: service.name, registered, proposed, reason: 'natural port now free' };
+        })
+      : [];
+
+    if (options.repair) {
+      const preview = formatRepairPreview({
+        slot,
+        dbName,
+        changes: portChanges,
+        recreatedDockerServices: recreateServices,
+        dryRun: options.dryRun,
+      });
+      if (!options.json) {
+        process.stdout.write(preview);
+      }
+
+      const anyChange = portChanges.some((c) => c.registered !== c.proposed);
+      const noopRepair = !anyChange && recreateServices.length === 0;
+
+      if (options.dryRun || noopRepair) {
+        if (options.json) {
+          console.log(
+            formatJson(
+              success({
+                slot,
+                ports,
+                portDrifts,
+                portChanges,
+                recreatedDockerServices: recreateServices,
+                repaired: true,
+                dryRun: options.dryRun,
+              }),
+            ),
+          );
+        }
+        return;
+      }
+    }
+
     const docker = ensureDockerServices({
       mainRoot,
       slot,
@@ -174,6 +291,7 @@ export async function setupCommand(
       dbName,
       ports,
       config,
+      recreateServices,
     });
 
     // Copy and patch env files
@@ -204,7 +322,19 @@ export async function setupCommand(
     }
 
     if (options.json) {
-      console.log(formatJson(success({ slot, ...allocation, portDrifts })));
+      console.log(
+        formatJson(
+          success({
+            slot,
+            ...allocation,
+            portDrifts,
+            portChanges,
+            recreatedDockerServices: recreateServices,
+            repaired: !!options.repair,
+            dryRun: !!options.dryRun,
+          }),
+        ),
+      );
     } else {
       console.log(formatSetupSummary(slot, allocation));
     }

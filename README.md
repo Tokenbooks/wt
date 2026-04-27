@@ -181,15 +181,45 @@ Shell helper tip:
 wto() { cd "$(wt open "$@")"; }
 ```
 
-### `wt setup [path] [--no-install] [--json]`
+### `wt setup [path] [--no-install] [--json] [--repair] [--dry-run]`
 
 Sets up an existing worktree that was created manually or by another tool. Useful when:
 
 - You ran `git worktree add` directly
 - A worktree's env files need regenerating
 - Called automatically by the `post-checkout` hook
+- A worktree's port allocation has gone stale (use `--repair`)
 
-If the worktree already has a slot allocation, it reuses it.
+If the worktree already has a slot allocation, it reuses it. `wt setup` is idempotent for Docker: services whose compose-config hash hasn't changed are left running; only services with a config change (or a port change in `--repair` mode) are stopped and recreated. The first `wt setup` after upgrading to this version stores the current hashes as a baseline without recreating anything.
+
+#### `--repair`
+
+Re-allocates ports for an existing worktree as if creating it fresh now. Useful when:
+
+- An external process has seized one of the worktree's ports.
+- The allocation predates port-drift (v0.4.1) and needs refreshing.
+- An adjacent slot was removed, freeing a port the worktree had drifted around.
+
+Repair re-runs `allocateServicePorts` excluding the slot's own current ports from the reserved set, then writes the new allocation, re-renders env files, and recreates only the docker services whose ports (or compose config) actually changed. `wt remove` is intentionally not the answer to a stale port allocation — it would delete the worktree directory and any uncommitted work. Repair preserves the worktree directory, the database, and untouched ports.
+
+#### `--dry-run`
+
+Used with `--repair`, prints the proposed reallocation and exits without writing anything. The output looks like:
+
+```
+Repair preview for slot 20 (cryptoacc_wt20):
+  app             5000 → 5005   in use by python3[12345]
+  server          5001 (unchanged)
+  slack-bot       5010 (unchanged)
+  sync-exchanges  5002 (unchanged)
+  redis           8379 (unchanged)
+
+Docker services to recreate: redis
+
+[dry-run] No changes written. Re-run without --dry-run to apply.
+```
+
+`--dry-run` requires `--repair`; using it alone errors out.
 
 ### `wt remove <targets...> [--all] [--keep-db] [--json]`
 

@@ -131,7 +131,11 @@ describeDocker('docker-services integration', () => {
       config,
     });
 
-    expect(allocation).toEqual({ projectName, services: ['redis'] });
+    expect(allocation).toEqual({
+      projectName,
+      services: ['redis'],
+      serviceHashes: { redis: expect.stringMatching(/^[a-f0-9]{12}$/) as unknown as string },
+    });
     await waitForRedis(port);
 
     const projects = listManagedDockerProjectsForRepo(mainRoot);

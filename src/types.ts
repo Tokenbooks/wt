@@ -45,6 +45,14 @@ export interface AllocatedPorts {
   readonly drifts: readonly PortDrift[];
 }
 
+/** A per-service port transition reported by `wt setup --repair` */
+export interface PortChange {
+  readonly service: string;
+  readonly registered: number;
+  readonly proposed: number;
+  readonly reason: string;
+}
+
 /** Result of CLI operations for --json output */
 export interface CliResult<T = unknown> {
   readonly success: boolean;

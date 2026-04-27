@@ -106,3 +106,56 @@ export function formatSetupSummary(
     `  Path:     ${alloc.worktreePath}`,
   ].join('\n');
 }
+
+export interface RepairPreviewInput {
+  readonly slot: number;
+  readonly dbName: string;
+  readonly changes: ReadonlyArray<{
+    readonly service: string;
+    readonly registered: number;
+    readonly proposed: number;
+    readonly reason: string;
+  }>;
+  readonly recreatedDockerServices: readonly string[];
+  readonly dryRun: boolean;
+}
+
+export function formatRepairPreview(input: RepairPreviewInput): string {
+  const anyChange = input.changes.some((c) => c.registered !== c.proposed);
+  if (!anyChange && input.recreatedDockerServices.length === 0) {
+    return `Repair check for slot ${input.slot}: no changes needed.\n`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`Repair preview for slot ${input.slot} (${input.dbName}):`);
+
+  const nameWidth = Math.max(
+    8,
+    ...input.changes.map((c) => c.service.length),
+  );
+
+  for (const change of input.changes) {
+    const name = change.service.padEnd(nameWidth);
+    if (change.registered === change.proposed) {
+      lines.push(`  ${name}  ${change.registered} (unchanged)`);
+    } else {
+      lines.push(
+        `  ${name}  ${change.registered} → ${change.proposed}   ${change.reason}`,
+      );
+    }
+  }
+
+  if (input.recreatedDockerServices.length > 0) {
+    lines.push('');
+    lines.push(
+      `Docker services to recreate: ${input.recreatedDockerServices.join(', ')}`,
+    );
+  }
+
+  if (input.dryRun) {
+    lines.push('');
+    lines.push('[dry-run] No changes written. Re-run without --dry-run to apply.');
+  }
+
+  return lines.join('\n') + '\n';
+}

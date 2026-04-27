@@ -396,6 +396,7 @@ describe('new command rollback on failure', () => {
     mockEnsureDockerServices.mockReturnValue({
       projectName: 'wt-2-myapp-deadbeef',
       services: ['redis'],
+      serviceHashes: {},
     });
     mockRemoveDockerServices.mockReturnValue(true);
     mockDatabaseExists.mockResolvedValue(false);

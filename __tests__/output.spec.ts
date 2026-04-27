@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { extractErrorMessage } from '../src/output';
+import { extractErrorMessage, formatRepairPreview } from '../src/output';
 
 describe('extractErrorMessage', () => {
   it('extracts message from a regular Error', () => {
@@ -47,5 +47,55 @@ describe('extractErrorMessage', () => {
   it('returns Unknown error for null/undefined', () => {
     expect(extractErrorMessage(null)).toBe('null');
     expect(extractErrorMessage(undefined)).toBe('undefined');
+  });
+
+  describe('formatRepairPreview', () => {
+    it('renders unchanged services and one repaired service', () => {
+      const text = formatRepairPreview({
+        slot: 20,
+        dbName: 'cryptoacc_wt20',
+        changes: [
+          { service: 'app', registered: 5000, proposed: 5005, reason: 'in use by python3[12345]' },
+          { service: 'server', registered: 5001, proposed: 5001, reason: 'unchanged' },
+        ],
+        recreatedDockerServices: ['redis'],
+        dryRun: true,
+      });
+
+      expect(text).toContain('Repair preview for slot 20 (cryptoacc_wt20):');
+      expect(text).toContain('app');
+      expect(text).toContain('5000 → 5005');
+      expect(text).toContain('in use by python3[12345]');
+      expect(text).toContain('server');
+      expect(text).toContain('(unchanged)');
+      expect(text).toContain('Docker services to recreate: redis');
+      expect(text).toContain('[dry-run] No changes written');
+    });
+
+    it('renders an apply-mode preview without the [dry-run] line', () => {
+      const text = formatRepairPreview({
+        slot: 20,
+        dbName: 'cryptoacc_wt20',
+        changes: [{ service: 'app', registered: 5000, proposed: 5005, reason: 'in use by node[1]' }],
+        recreatedDockerServices: [],
+        dryRun: false,
+      });
+
+      expect(text).not.toContain('[dry-run]');
+    });
+
+    it('renders the "no changes needed" form when nothing changed and no docker recreate', () => {
+      const text = formatRepairPreview({
+        slot: 20,
+        dbName: 'cryptoacc_wt20',
+        changes: [
+          { service: 'app', registered: 5000, proposed: 5000, reason: 'unchanged' },
+        ],
+        recreatedDockerServices: [],
+        dryRun: false,
+      });
+
+      expect(text).toContain('Repair check for slot 20: no changes needed.');
+    });
   });
 });
