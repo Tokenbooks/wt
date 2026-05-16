@@ -47,6 +47,11 @@ interface DockerInspectRecord {
   };
 }
 
+interface DockerNetworkInspectRecord {
+  readonly Name?: string;
+  readonly Labels?: Record<string, string>;
+}
+
 export interface DockerComposeService {
   readonly image: string;
   readonly container_name: string;
@@ -59,8 +64,13 @@ export interface DockerComposeService {
   readonly extra_hosts?: string[];
 }
 
+export interface DockerComposeNetwork {
+  readonly labels: string[];
+}
+
 export interface DockerComposeConfig {
   readonly services: Record<string, DockerComposeService>;
+  readonly networks?: Record<string, DockerComposeNetwork>;
 }
 
 /**
@@ -132,6 +142,20 @@ function inspectDockerContainer(containerName: string): DockerInspectRecord | nu
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('No such container')) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+function inspectDockerNetwork(networkName: string): DockerNetworkInspectRecord | null {
+  try {
+    const raw = runDocker(['network', 'inspect', networkName]);
+    const parsed = JSON.parse(raw) as DockerNetworkInspectRecord[];
+    return parsed[0] ?? null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('No such network') || message.includes('not found')) {
       return null;
     }
     throw err;
@@ -282,7 +306,20 @@ export function buildDockerComposeConfig(options: EnsureDockerServicesOptions): 
     services[service.name] = composeService;
   }
 
-  return { services };
+  const networks: Record<string, DockerComposeNetwork> = {
+    default: {
+      labels: [
+        `${DOCKER_LABEL_PREFIX}.managed=true`,
+        `${DOCKER_LABEL_PREFIX}.repo-root=${options.mainRoot}`,
+        `${DOCKER_LABEL_PREFIX}.project=${projectName}`,
+        `${DOCKER_LABEL_PREFIX}.slot=${options.slot}`,
+        `${DOCKER_LABEL_PREFIX}.branch=${options.branchName}`,
+        `${DOCKER_LABEL_PREFIX}.worktree=${options.worktreePath}`,
+      ],
+    },
+  };
+
+  return { services, networks };
 }
 
 export function ensureDockerServices(
@@ -437,6 +474,56 @@ export function listManagedDockerProjectsForRepo(mainRoot: string): ManagedDocke
     }
     existing.containerNames.push(name);
     projects.set(projectName, existing);
+  }
+
+  // Networks outlive their containers when those are reaped by `docker rm`,
+  // Docker Desktop resets, or partial `wt new` failures. Scanning for our
+  // labeled networks lets `wt prune` reclaim subnets that would otherwise
+  // leak until manual `docker network prune`.
+  let networkNames: string[];
+  try {
+    networkNames = listDockerResourceIds([
+      'network',
+      'ls',
+      '--filter',
+      `label=${DOCKER_LABEL_PREFIX}.repo-root=${mainRoot}`,
+      '--filter',
+      `label=${DOCKER_LABEL_PREFIX}.managed=true`,
+      '--format',
+      '{{.Name}}',
+    ]);
+  } catch (err) {
+    if (err instanceof Error && /Docker CLI not found|Cannot connect to the Docker daemon/i.test(err.message)) {
+      return [];
+    }
+    throw err;
+  }
+
+  for (const networkName of networkNames) {
+    const inspect = inspectDockerNetwork(networkName);
+    if (!inspect) {
+      continue;
+    }
+    const labels = inspect.Labels ?? {};
+    const slotLabel = labels[`${DOCKER_LABEL_PREFIX}.slot`];
+    if (!slotLabel) {
+      continue;
+    }
+    const slot = Number.parseInt(slotLabel, 10);
+    if (!Number.isSafeInteger(slot)) {
+      continue;
+    }
+    const projectName = labels[`${DOCKER_LABEL_PREFIX}.project`] ?? getDockerProjectName(mainRoot, slot);
+    if (projects.has(projectName)) {
+      continue;
+    }
+    projects.set(projectName, {
+      slot,
+      branch: labels[`${DOCKER_LABEL_PREFIX}.branch`],
+      worktreePath: labels[`${DOCKER_LABEL_PREFIX}.worktree`],
+      services: new Set<string>(),
+      containerNames: [],
+    });
   }
 
   return Array.from(projects.entries())
