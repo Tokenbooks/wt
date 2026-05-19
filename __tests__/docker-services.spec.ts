@@ -5,6 +5,7 @@ import {
   computeServiceHashes,
   ensureDockerServices,
   getDockerProjectName,
+  listManagedDockerProjectsForRepo,
   usesDockerServices,
 } from '../src/core/docker-services';
 import type { WtConfig } from '../src/types';
@@ -95,6 +96,33 @@ describe('docker-services', () => {
       },
       extra_hosts: ['host.docker.internal:host-gateway'],
     });
+  });
+
+  it('labels the default network so it can be discovered by repo-root, slot, and project', () => {
+    const compose = buildDockerComposeConfig({
+      mainRoot: '/Users/dev/My Project',
+      slot: 3,
+      branchName: 'feat/electric',
+      worktreePath: '/Users/dev/My Project/.worktrees/feat-electric',
+      dbName: 'cryptoacc_wt3',
+      ports: { electric: 3304, redis: 6679 },
+      config,
+    });
+
+    const projectName = getDockerProjectName('/Users/dev/My Project', 3);
+    const defaultNetwork = compose.networks?.default;
+
+    expect(defaultNetwork).toBeDefined();
+    expect(defaultNetwork?.labels).toEqual(
+      expect.arrayContaining([
+        'dev.tokenbooks.wt.managed=true',
+        'dev.tokenbooks.wt.repo-root=/Users/dev/My Project',
+        `dev.tokenbooks.wt.project=${projectName}`,
+        'dev.tokenbooks.wt.slot=3',
+        'dev.tokenbooks.wt.branch=feat/electric',
+        'dev.tokenbooks.wt.worktree=/Users/dev/My Project/.worktrees/feat-electric',
+      ]),
+    );
   });
 
   describe('computeServiceHashes', () => {
@@ -272,6 +300,156 @@ describe('ensureDockerServices invocation', () => {
         '-d',
         '--no-recreate',
         '--remove-orphans',
+      ]),
+    );
+  });
+});
+
+describe('listManagedDockerProjectsForRepo orphan discovery', () => {
+  const mainRoot = '/Users/dev/My Project';
+
+  interface DockerCall {
+    readonly args: readonly string[];
+  }
+
+  /**
+   * Routes mocked docker calls by verb. Captures every call so tests can
+   * assert on the exact CLI invocation when discovery filters matter.
+   */
+  function mockDocker(handlers: {
+    ps?: () => string;
+    containerInspect?: (name: string) => string;
+    networkLs?: () => string;
+    networkInspect?: (name: string) => string;
+  }): { calls: DockerCall[] } {
+    const calls: DockerCall[] = [];
+    jest.mocked(child_process.execFileSync).mockImplementation((_cmd, rawArgs) => {
+      const args = [...(rawArgs as string[])];
+      calls.push({ args });
+      const [verb, sub] = args;
+      if (verb === 'ps') {
+        return handlers.ps?.() ?? '';
+      }
+      if (verb === 'container' && sub === 'inspect') {
+        return handlers.containerInspect?.(args[2]!) ?? '[]';
+      }
+      if (verb === 'network' && sub === 'ls') {
+        return handlers.networkLs?.() ?? '';
+      }
+      if (verb === 'network' && sub === 'inspect') {
+        return handlers.networkInspect?.(args[2]!) ?? '[]';
+      }
+      return '';
+    });
+    return { calls };
+  }
+
+  beforeEach(() => {
+    jest.mocked(child_process.execFileSync).mockReset();
+  });
+
+  afterEach(() => {
+    jest.resetAllMocks();
+  });
+
+  it('discovers a project whose containers were reaped but whose compose network survives', () => {
+    const projectName = getDockerProjectName(mainRoot, 4);
+    const networkName = `${projectName}_default`;
+    mockDocker({
+      ps: () => '',
+      networkLs: () => networkName,
+      networkInspect: () => JSON.stringify([
+        {
+          Name: networkName,
+          Labels: {
+            'com.docker.compose.project': projectName,
+            'dev.tokenbooks.wt.managed': 'true',
+            'dev.tokenbooks.wt.repo-root': mainRoot,
+            'dev.tokenbooks.wt.project': projectName,
+            'dev.tokenbooks.wt.slot': '4',
+            'dev.tokenbooks.wt.branch': 'feat/sync-tron',
+            'dev.tokenbooks.wt.worktree': `${mainRoot}/.worktrees/feat-sync-tron`,
+          },
+        },
+      ]),
+    });
+
+    const projects = listManagedDockerProjectsForRepo(mainRoot);
+
+    expect(projects).toEqual([
+      {
+        projectName,
+        slot: 4,
+        branch: 'feat/sync-tron',
+        worktreePath: `${mainRoot}/.worktrees/feat-sync-tron`,
+        services: [],
+        containerNames: [],
+      },
+    ]);
+  });
+
+  it('does not duplicate projects that have both surviving containers and a network', () => {
+    const projectName = getDockerProjectName(mainRoot, 5);
+    const containerName = `${projectName}-redis`;
+    const networkName = `${projectName}_default`;
+    mockDocker({
+      ps: () => containerName,
+      containerInspect: () => JSON.stringify([
+        {
+          Config: {
+            Labels: {
+              'dev.tokenbooks.wt.managed': 'true',
+              'dev.tokenbooks.wt.repo-root': mainRoot,
+              'dev.tokenbooks.wt.project': projectName,
+              'dev.tokenbooks.wt.slot': '5',
+              'dev.tokenbooks.wt.branch': 'feat/dual',
+              'dev.tokenbooks.wt.worktree': `${mainRoot}/.worktrees/feat-dual`,
+              'dev.tokenbooks.wt.service': 'redis',
+            },
+          },
+        },
+      ]),
+      networkLs: () => networkName,
+      networkInspect: () => JSON.stringify([
+        {
+          Name: networkName,
+          Labels: {
+            'com.docker.compose.project': projectName,
+            'dev.tokenbooks.wt.managed': 'true',
+            'dev.tokenbooks.wt.repo-root': mainRoot,
+            'dev.tokenbooks.wt.project': projectName,
+            'dev.tokenbooks.wt.slot': '5',
+            'dev.tokenbooks.wt.branch': 'feat/dual',
+            'dev.tokenbooks.wt.worktree': `${mainRoot}/.worktrees/feat-dual`,
+          },
+        },
+      ]),
+    });
+
+    const projects = listManagedDockerProjectsForRepo(mainRoot);
+
+    expect(projects).toHaveLength(1);
+    expect(projects[0]).toMatchObject({
+      projectName,
+      slot: 5,
+      branch: 'feat/dual',
+      services: ['redis'],
+      containerNames: [containerName],
+    });
+  });
+
+  it('filters network discovery by repo-root and managed labels', () => {
+    const { calls } = mockDocker({});
+
+    listManagedDockerProjectsForRepo(mainRoot);
+
+    const networkLsCall = calls.find(({ args }) => args[0] === 'network' && args[1] === 'ls');
+    expect(networkLsCall?.args).toEqual(
+      expect.arrayContaining([
+        '--filter',
+        `label=dev.tokenbooks.wt.repo-root=${mainRoot}`,
+        '--filter',
+        'label=dev.tokenbooks.wt.managed=true',
       ]),
     );
   });

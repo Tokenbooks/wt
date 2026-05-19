@@ -1,8 +1,13 @@
 import { afterAll, afterEach, describe, expect, it, jest } from '@jest/globals';
+import { execFileSync } from 'node:child_process';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+
+function runCli(cmd: string, args: readonly string[]): string {
+  return execFileSync(cmd, args, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
 import {
   ensureDockerServices,
   getDockerProjectName,
@@ -151,5 +156,44 @@ describeDocker('docker-services integration', () => {
     expect(removeDockerServices(mainRoot, SLOT)).toBe(true);
     expect(listManagedDockerProjectsForRepo(mainRoot)).toEqual([]);
     expect(removeDockerServices(mainRoot, SLOT)).toBe(false);
+  });
+
+  it('discovers a project whose containers have been removed but whose network still exists', async () => {
+    const port = await reserveFreePort();
+    const projectName = getDockerProjectName(mainRoot, SLOT);
+    const containerName = `${projectName}-redis`;
+    const networkName = `${projectName}_default`;
+
+    ensureDockerServices({
+      mainRoot,
+      slot: SLOT,
+      branchName,
+      worktreePath,
+      dbName: 'myapp_wt42',
+      ports: { redis: port },
+      config,
+    });
+    await waitForRedis(port);
+
+    // Simulate a container reap (e.g. `docker rm -f`, Docker Desktop reset)
+    // that leaves the labeled network behind. Without network-aware discovery
+    // this project would be invisible to `wt prune` and leak a subnet.
+    runCli('docker', ['rm', '-f', containerName]);
+
+    const projects = listManagedDockerProjectsForRepo(mainRoot);
+    expect(projects).toContainEqual({
+      projectName,
+      slot: SLOT,
+      branch: branchName,
+      worktreePath,
+      services: [],
+      containerNames: [],
+    });
+
+    expect(removeDockerServices(mainRoot, SLOT)).toBe(true);
+
+    // Confirm the orphan network really existed and is now gone.
+    const remaining = runCli('docker', ['network', 'ls', '-q', '--filter', `name=${networkName}`]).trim();
+    expect(remaining).toBe('');
   });
 });

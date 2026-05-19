@@ -246,7 +246,7 @@ Finds worktrees that Git already marks as prunable, then:
 3. Removes managed Docker projects if present
 4. Runs `git worktree prune`
 
-This is mainly for worktrees that were deleted manually from disk instead of through `wt remove`.
+This is mainly for worktrees that were deleted manually from disk instead of through `wt remove`. It also recovers Docker networks orphaned by container reaps (e.g. `docker rm -f`, Docker Desktop resets, partial `wt new` failures) — these would otherwise consume subnet slots from Docker's default address pool and eventually surface as `all predefined address pools have been fully subnetted` on the next `wt new`.
 
 Use `--dry-run` to preview what would be pruned.
 
