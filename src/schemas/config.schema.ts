@@ -36,6 +36,12 @@ export const envFileSchema = z.object({
   patches: z.array(patchSchema),
 });
 
+/** Schema for a safe example env file to merge into a local env file */
+export const seedEnvFileSchema = z.object({
+  source: z.string().min(1),
+  target: z.string().min(1),
+});
+
 export const dockerPortSchema = z.object({
   service: z.string().min(1),
   target: z.number().int().positive(),
@@ -62,6 +68,7 @@ export const configSchema = z.object({
   services: z.array(serviceSchema).min(1),
   dockerServices: z.array(dockerServiceSchema).default([]),
   envFiles: z.array(envFileSchema),
+  seedEnvFiles: z.array(seedEnvFileSchema).default([]),
   postSetup: z.array(z.string()).default([]),
   autoInstall: z.boolean().default(true),
 });

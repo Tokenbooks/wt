@@ -1,7 +1,7 @@
 ---
 name: wt
-description: Manage git worktree isolation — create, list, remove, and prune worktrees with isolated databases, Docker services, and ports
-argument-hint: "[new|open|list|remove|prune|doctor|setup|init] [args...]"
+description: Manage git worktree isolation — create, list, remove, prune, and seed env files for worktrees with isolated databases, Docker services, and ports
+argument-hint: "[new|open|list|remove|prune|doctor|setup|env|init] [args...]"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 ---
 
@@ -21,6 +21,7 @@ The user wants to set up `wt` in their project for the first time. Follow these 
 
 Search the repository to find:
 - All `.env` files (not `.env.example`): `find . -name '.env' -not -path '*/node_modules/*' -not -path '*/.git/*'`
+- All committed `.env.example` files with safe local defaults: `find . -name '.env.example' -not -path '*/node_modules/*' -not -path '*/.git/*'`
 - The `DATABASE_URL` value to extract the base database name (path segment after the port, before `?`)
 - Any `REDIS_URL` values and their base port/auth format
 - All services and their default ports — check `package.json` scripts, Docker Compose files, framework config files
@@ -68,6 +69,9 @@ Build the config file at the repository root:
       ]
     }
   ],
+  "seedEnvFiles": [
+    { "source": "<relative path to .env.example>", "target": "<relative path to .env>" }
+  ],
   "postSetup": ["<install command>"],
   "autoInstall": true
 }
@@ -76,6 +80,7 @@ Build the config file at the repository root:
 Validation rules:
 - Every `port` and `url` patch must have a `service` that exists in `services`
 - Every `dockerServices[].ports[].service` must exist in `services`
+- Every `seedEnvFiles[].source` should be a committed example file with safe local defaults
 - `portStride` * `maxSlots` + max default port must be < 65535
 - `baseDatabaseName` must match the actual DB name in `DATABASE_URL`
 - If using `dockerServices`, Docker must be available locally
@@ -99,6 +104,7 @@ Add `.worktree-registry.json` if not already present.
   "scripts": {
     "wt": "wt",
     "wt:new": "wt new",
+    "wt:env": "wt env seed",
     "wt:list": "wt list",
     "wt:doctor": "wt doctor"
   }
@@ -139,6 +145,7 @@ Make it executable: `chmod +x .husky/post-checkout`
 ```bash
 wt list                              # Should show "No worktree allocations found."
 wt doctor                            # Should show "All checks passed."
+wt env seed --dry-run                # Should preview safe env default updates
 wt new test/wt-smoke --no-install    # Create a test worktree
 wt list                              # Should show the allocation
 wt remove .worktrees/test-wt-smoke   # Clean up
@@ -246,6 +253,24 @@ Variants:
 
 ---
 
+### `env seed [path]` — Seed safe env defaults
+
+Run:
+```bash
+wt env seed $1
+```
+
+Use this in the root worktree or any branch worktree when `.env.example` files have gained new safe local-development variables. It creates missing configured `.env` targets from examples and appends only variables that are missing from existing targets. It never overwrites developer values.
+
+Variants:
+
+- `wt env seed --dry-run` — preview files that would be created and vars that would be appended.
+- `wt env seed --json` — output machine-readable results.
+
+`wt new` and `wt setup` run this same seed pass automatically after copying env files from the main worktree and before applying slot-specific patches.
+
+---
+
 ### No arguments or unrecognized command
 
 Show a brief help:
@@ -260,4 +285,5 @@ Available commands:
   /wt prune [--dry-run] — Prune Git-prunable worktrees and clean up matching managed resources
   /wt doctor            — Diagnose and fix environment issues
   /wt setup [path]      — Set up an existing worktree
+  /wt env seed [path]   — Create/fill safe env defaults from examples
 ```

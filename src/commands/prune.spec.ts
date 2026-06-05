@@ -96,6 +96,7 @@ describe('pruneCommand', () => {
       },
     ],
     envFiles: [],
+    seedEnvFiles: [],
     postSetup: [],
     autoInstall: true,
   };

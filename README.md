@@ -26,7 +26,7 @@ Each worktree gets a numbered slot. The slot determines everything:
 - **Database**: Created via `CREATE DATABASE ... TEMPLATE` (fast filesystem copy, not dump/restore)
 - **Docker services**: Run in a dedicated Docker Compose project per worktree, grouped in Docker Desktop
 - **Ports**: Offset by `portStride` (default 100) per slot
-- **Env files**: Copied from main worktree and patched with the slot's values
+- **Env files**: Copied from main worktree, filled with safe defaults from configured `.env.example` files, and patched with the slot's values
 
 ## Quick Start
 
@@ -105,6 +105,11 @@ Create this file in your repository root and commit it. See [Configuration Refer
       ]
     }
   ],
+  "seedEnvFiles": [
+    { "source": ".env.example", "target": ".env" },
+    { "source": "backend/.env.example", "target": "backend/.env" },
+    { "source": "frontend/.env.example", "target": "frontend/.env" }
+  ],
   "postSetup": ["npm install"],
   "autoInstall": true
 }
@@ -131,6 +136,10 @@ wt list
 
 # Check health
 wt doctor
+
+# Create missing .env files from examples and add missing safe defaults
+wt env seed --dry-run
+wt env seed
 
 # Clean up by path or slot
 wt remove .worktrees/feat-my-feature
@@ -159,7 +168,7 @@ Creates a new git worktree and sets up its isolated environment:
 1. Allocates the next available slot (or uses `--slot N`)
 2. Checks whether `origin/<branch>` exists; if it does, fetches it and creates a tracking local branch, otherwise creates a fresh local branch
 3. Creates a new Postgres database from the main DB as template
-4. Copies all configured `.env` files, patching each with slot-specific values
+4. Copies configured `.env` files, fills missing safe defaults from examples, and patches each with slot-specific values
 5. Starts configured Docker services after the slot database exists
 6. Runs `postSetup` commands (unless `--no-install`)
 
@@ -220,6 +229,20 @@ Docker services to recreate: redis
 ```
 
 `--dry-run` requires `--repair`; using it alone errors out.
+
+### `wt env seed [path] [--dry-run] [--json]`
+
+Creates missing local env files from configured examples and adds any variables that are present in the example but missing from the local target. Existing developer values are never overwritten.
+
+Use this for the root worktree as well as branch worktrees:
+
+```bash
+wt env seed --dry-run      # preview changes for the current checkout
+wt env seed                # create/fill configured env files
+wt env seed .worktrees/foo # target a specific worktree
+```
+
+`wt new` and `wt setup` run the same seed pass automatically after copying env files from the main worktree and before applying slot-specific patches.
 
 ### `wt remove <targets...> [--all] [--keep-db] [--json]`
 
@@ -349,6 +372,16 @@ This file lives in your repository root and is committed to version control.
     }
   ],
 
+  // Safe example env files to merge into local env files (default: []).
+  // Missing targets are created from the example. Existing targets keep
+  // developer values; only missing vars are appended.
+  "seedEnvFiles": [
+    {
+      "source": string,        // Example path relative to the target checkout
+      "target": string         // Local env path relative to the target checkout
+    }
+  ],
+
   // Commands to run in the worktree after env setup (default: [])
   "postSetup": string[],
 
@@ -371,6 +404,27 @@ This file lives in your repository root and is committed to version control.
 The `port` and `url` types require a `service` field that matches a name in `services`.
 
 Legacy `type: "redis"` patches are no longer supported. Declare Redis in `dockerServices` and patch `REDIS_URL` with `type: "url"` instead.
+
+### Env Seeding
+
+`seedEnvFiles` is for committed safe defaults. Each entry maps a checked-in example file to the local env file that should receive those defaults:
+
+```json
+{
+  "seedEnvFiles": [
+    { "source": ".env.example", "target": ".env" },
+    { "source": "server/.env.example", "target": "server/.env" }
+  ]
+}
+```
+
+Rules:
+
+- If `target` does not exist, it is created from `source`.
+- If `target` exists, existing values are preserved.
+- Variables present in `source` but missing from `target` are appended under a generated marker.
+- Variables removed from `source` are not removed from `target`.
+- Placeholder or blank values from examples are copied exactly; `wt` does not infer secrets.
 
 ### `.worktree-registry.json`
 
@@ -451,7 +505,8 @@ Identify these from the repository:
 - **Redis URL format**: Search for `REDIS_URL`. If Redis should be per-worktree, declare Redis in both `services` and `dockerServices`, then patch `REDIS_URL` with `type: "url"`.
 - **Services and ports**: Find all dev server commands and their default ports. Check `package.json` scripts, existing Docker Compose files, and framework configs.
 - **Docker services**: Move per-worktree containers from Docker Compose files into `dockerServices`.
-- **Env files**: List all `.env` files (not `.env.example`). These are the files that need patching.
+- **Env files**: List all `.env` files that need slot-specific patching.
+- **Seed env files**: List all committed `.env.example` files that contain safe local defaults and map each one to its target `.env`.
 
 ### Step 2: Map env vars to patch types
 
@@ -475,12 +530,14 @@ Using the discovered information, construct the config:
 2. services = each dev server as { name, defaultPort }
 3. dockerServices = each per-worktree container, with ports referencing `services`
 4. envFiles = each .env file with its patches
-5. postSetup = the install command for the package manager (npm install, pnpm install, etc.)
+5. seedEnvFiles = each safe example mapped to its local env target
+6. postSetup = the install command for the package manager (npm install, pnpm install, etc.)
 ```
 
 Validate that:
 - Every `port` and `url` patch has a `service` that exists in `services`
 - Every `dockerServices[].ports[].service` exists in `services`
+- Every `seedEnvFiles[].source` is a committed example file with safe local defaults
 - If using `dockerServices`, Docker is available locally
 - The `portStride` (default 100) doesn't cause port collisions with other local services
 - `maxSlots * portStride` doesn't push ports into reserved ranges (e.g., above 65535)
@@ -497,6 +554,7 @@ echo ".worktree-registry.json" >> .gitignore
 # Verify
 wt list          # Should show "No worktree allocations found."
 wt doctor        # Should show "All checks passed."
+wt env seed --dry-run
 
 # Smoke test (creates a real worktree + database)
 wt new test/wt-smoke --no-install

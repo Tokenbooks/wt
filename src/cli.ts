@@ -8,6 +8,7 @@ import { pruneCommand } from './commands/prune';
 import { listCommand } from './commands/list';
 import { doctorCommand } from './commands/doctor';
 import { openCommand } from './commands/open';
+import { envSeedCommand } from './commands/env';
 import { getMainWorktreePath } from './core/git';
 import { name, version } from '../package.json';
 import { getUpdateNotice, refreshUpdateCache, isCacheFresh } from './core/update-check';
@@ -50,6 +51,23 @@ program
       dryRun: opts.dryRun,
     });
   });
+
+program
+  .command('env')
+  .description('Manage local env files')
+  .addCommand(
+    new Command('seed')
+      .description('Create configured env files from examples and fill missing vars')
+      .argument('[path]', 'Repo or worktree path (default: current directory)')
+      .option('--dry-run', 'Preview env file changes without writing', false)
+      .option('--json', 'Output as JSON', false)
+      .action((targetPath: string | undefined, opts) => {
+        envSeedCommand(targetPath, {
+          json: opts.json,
+          dryRun: opts.dryRun,
+        });
+      }),
+  );
 
 program
   .command('open')

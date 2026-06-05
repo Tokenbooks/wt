@@ -3,6 +3,7 @@ import type {
   configSchema,
   serviceSchema,
   envFileSchema,
+  seedEnvFileSchema,
   patchSchema,
   dockerServiceSchema,
 } from './schemas/config.schema';
@@ -15,6 +16,7 @@ import type {
 export type WtConfig = z.infer<typeof configSchema>;
 export type ServiceConfig = z.infer<typeof serviceSchema>;
 export type EnvFileConfig = z.infer<typeof envFileSchema>;
+export type SeedEnvFileConfig = z.infer<typeof seedEnvFileSchema>;
 export type PatchConfig = z.infer<typeof patchSchema>;
 export type DockerServiceConfig = z.infer<typeof dockerServiceSchema>;
 
