@@ -98,6 +98,7 @@ const config: WtConfig = {
   services: [{ name: 'web', defaultPort: 3000 }],
   dockerServices: [],
   envFiles: [],
+  seedEnvFiles: [],
   postSetup: [],
   autoInstall: true,
 };
