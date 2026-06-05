@@ -3,7 +3,6 @@ import type {
   configSchema,
   serviceSchema,
   envFileSchema,
-  seedEnvFileSchema,
   patchSchema,
   dockerServiceSchema,
 } from './schemas/config.schema';
@@ -13,11 +12,15 @@ import type {
 } from './schemas/registry.schema';
 
 /** Declarative config loaded from wt.config.json */
-export type WtConfig = z.infer<typeof configSchema>;
+type ParsedWtConfig = z.infer<typeof configSchema>;
 export type ServiceConfig = z.infer<typeof serviceSchema>;
-export type EnvFileConfig = z.infer<typeof envFileSchema>;
-export type SeedEnvFileConfig = z.infer<typeof seedEnvFileSchema>;
 export type PatchConfig = z.infer<typeof patchSchema>;
+export type EnvFileConfig = Omit<z.infer<typeof envFileSchema>, 'patches'> & {
+  readonly patches?: PatchConfig[];
+};
+export type WtConfig = Omit<ParsedWtConfig, 'envFiles'> & {
+  readonly envFiles: EnvFileConfig[];
+};
 export type DockerServiceConfig = z.infer<typeof dockerServiceSchema>;
 
 /** Registry persisted at .worktree-registry.json */

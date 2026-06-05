@@ -74,4 +74,30 @@ describe('loadConfig', () => {
       "Docker service 'electric' references unknown port service 'electric'.",
     );
   });
+
+  it('allows seedFrom with omitted patches and defaults patches to an empty array', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'wt.config.json'),
+      JSON.stringify({
+        baseDatabaseName: 'myapp',
+        services: [{ name: 'web', defaultPort: 3000 }],
+        envFiles: [
+          {
+            source: '.env',
+            seedFrom: '.env.example',
+          },
+        ],
+      }, null, 2),
+    );
+
+    const config = loadConfig(tmpDir);
+
+    expect(config.envFiles).toEqual([
+      {
+        source: '.env',
+        seedFrom: '.env.example',
+        patches: [],
+      },
+    ]);
+  });
 });

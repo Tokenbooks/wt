@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it } from '@jest/globals';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { copyAndPatchAllEnvFiles, seedEnvFiles } from './env-patcher';
+import { copyAndPatchAllEnvFiles, seedEnvFileDefaults } from './env-patcher';
 import type { WtConfig } from '../types';
 
-describe('seedEnvFiles', () => {
+describe('seedEnvFileDefaults', () => {
   let tmpDir: string;
 
   afterEach(() => {
@@ -25,8 +25,8 @@ describe('seedEnvFiles', () => {
       'utf-8',
     );
 
-    const result = seedEnvFiles(
-      [{ source: '.env.example', target: '.env' }],
+    const result = seedEnvFileDefaults(
+      [{ source: '.env', seedFrom: '.env.example' }],
       tmpDir,
       { dryRun: false },
     );
@@ -67,8 +67,8 @@ describe('seedEnvFiles', () => {
       'utf-8',
     );
 
-    const result = seedEnvFiles(
-      [{ source: '.env.example', target: '.env' }],
+    const result = seedEnvFileDefaults(
+      [{ source: '.env', seedFrom: '.env.example' }],
       tmpDir,
       { dryRun: false },
     );
@@ -94,8 +94,8 @@ describe('seedEnvFiles', () => {
     fs.writeFileSync(path.join(tmpDir, '.env.example'), 'A=1\nB=2\n', 'utf-8');
     fs.writeFileSync(path.join(tmpDir, '.env'), 'A=developer\n', 'utf-8');
 
-    const result = seedEnvFiles(
-      [{ source: '.env.example', target: '.env' }],
+    const result = seedEnvFileDefaults(
+      [{ source: '.env', seedFrom: '.env.example' }],
       tmpDir,
       { dryRun: true },
     );
@@ -112,7 +112,7 @@ describe('seedEnvFiles', () => {
   });
 });
 
-describe('copyAndPatchAllEnvFiles with seedEnvFiles', () => {
+describe('copyAndPatchAllEnvFiles with seedFrom', () => {
   let mainRoot: string;
   let worktreeRoot: string;
 
@@ -154,13 +154,13 @@ describe('copyAndPatchAllEnvFiles with seedEnvFiles', () => {
       envFiles: [
         {
           source: '.env',
+          seedFrom: '.env.example',
           patches: [
             { var: 'DATABASE_URL', type: 'database' },
             { var: 'API_URL', type: 'url', service: 'api' },
           ],
         },
       ],
-      seedEnvFiles: [{ source: '.env.example', target: '.env' }],
       postSetup: [],
       autoInstall: true,
     };
@@ -176,5 +176,38 @@ describe('copyAndPatchAllEnvFiles with seedEnvFiles', () => {
     expect(content).toContain('LOCAL_VALUE=from-main');
     expect(content).toContain('API_URL=http://localhost:4200/api');
     expect(content).toContain('SAFE_DEFAULT=true');
+  });
+
+  it('supports seed-only env files without patches', () => {
+    mainRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-env-main-'));
+    worktreeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-env-worktree-'));
+    fs.writeFileSync(path.join(worktreeRoot, 'worker.env.example'), 'WORKER_ENABLED=true\n', 'utf-8');
+
+    const config: WtConfig = {
+      baseDatabaseName: 'myapp',
+      baseWorktreePath: '.worktrees',
+      portStride: 100,
+      maxSlots: 50,
+      services: [{ name: 'api', defaultPort: 4000 }],
+      dockerServices: [],
+      envFiles: [
+        {
+          source: 'worker.env',
+          seedFrom: 'worker.env.example',
+        },
+      ],
+      postSetup: [],
+      autoInstall: true,
+    };
+
+    copyAndPatchAllEnvFiles(config, mainRoot, worktreeRoot, {
+      dbName: 'myapp_wt2',
+      ports: { api: 4200 },
+      branchName: 'feat/env-seed',
+    });
+
+    expect(fs.readFileSync(path.join(worktreeRoot, 'worker.env'), 'utf-8')).toBe(
+      'WORKER_ENABLED=true\n',
+    );
   });
 });

@@ -85,12 +85,14 @@ Create this file in your repository root and commit it. See [Configuration Refer
   "envFiles": [
     {
       "source": ".env",
+      "seedFrom": ".env.example",
       "patches": [
         { "var": "DATABASE_URL", "type": "database" }
       ]
     },
     {
       "source": "backend/.env",
+      "seedFrom": "backend/.env.example",
       "patches": [
         { "var": "DATABASE_URL", "type": "database" },
         { "var": "REDIS_URL", "type": "url", "service": "redis" },
@@ -99,16 +101,12 @@ Create this file in your repository root and commit it. See [Configuration Refer
     },
     {
       "source": "frontend/.env",
+      "seedFrom": "frontend/.env.example",
       "patches": [
         { "var": "PORT", "type": "port", "service": "web" },
         { "var": "API_URL", "type": "url", "service": "api" }
       ]
     }
-  ],
-  "seedEnvFiles": [
-    { "source": ".env.example", "target": ".env" },
-    { "source": "backend/.env.example", "target": "backend/.env" },
-    { "source": "frontend/.env.example", "target": "frontend/.env" }
   ],
   "postSetup": ["npm install"],
   "autoInstall": true
@@ -358,27 +356,18 @@ This file lives in your repository root and is committed to version control.
     }
   ],
 
-  // Env files to copy and patch for each worktree
+  // Env files to seed, copy, and patch for each worktree
   "envFiles": [
     {
       "source": string,        // Path relative to repo root
-      "patches": [
+      "seedFrom": string,      // Optional .env.example path relative to the target checkout
+      "patches": [            // Optional; defaults to []
         {
           "var": string,       // Env var name to patch
           "type": string,      // "database" | "port" | "url" | "branch"
           "service": string    // Required for "port" and "url" types
         }
       ]
-    }
-  ],
-
-  // Safe example env files to merge into local env files (default: []).
-  // Missing targets are created from the example. Existing targets keep
-  // developer values; only missing vars are appended.
-  "seedEnvFiles": [
-    {
-      "source": string,        // Example path relative to the target checkout
-      "target": string         // Local env path relative to the target checkout
     }
   ],
 
@@ -407,24 +396,25 @@ Legacy `type: "redis"` patches are no longer supported. Declare Redis in `docker
 
 ### Env Seeding
 
-`seedEnvFiles` is for committed safe defaults. Each entry maps a checked-in example file to the local env file that should receive those defaults:
+`envFiles[].seedFrom` is for committed safe defaults. It maps a checked-in example file to the local env file in the same `envFiles` entry:
 
 ```json
 {
-  "seedEnvFiles": [
-    { "source": ".env.example", "target": ".env" },
-    { "source": "server/.env.example", "target": "server/.env" }
+  "envFiles": [
+    { "source": ".env", "seedFrom": ".env.example" },
+    { "source": "server/.env", "seedFrom": "server/.env.example" }
   ]
 }
 ```
 
 Rules:
 
-- If `target` does not exist, it is created from `source`.
-- If `target` exists, existing values are preserved.
-- Variables present in `source` but missing from `target` are appended under a generated marker.
-- Variables removed from `source` are not removed from `target`.
+- If `source` does not exist, it is created from `seedFrom`.
+- If `source` exists, existing values are preserved.
+- Variables present in `seedFrom` but missing from `source` are appended under a generated marker.
+- Variables removed from `seedFrom` are not removed from `source`.
 - Placeholder or blank values from examples are copied exactly; `wt` does not infer secrets.
+- `patches` is optional. Use `patches: []` or omit it for seed-only env files.
 
 ### `.worktree-registry.json`
 
@@ -529,15 +519,14 @@ Using the discovered information, construct the config:
 1. baseDatabaseName = the DB name from the main DATABASE_URL
 2. services = each dev server as { name, defaultPort }
 3. dockerServices = each per-worktree container, with ports referencing `services`
-4. envFiles = each .env file with its patches
-5. seedEnvFiles = each safe example mapped to its local env target
-6. postSetup = the install command for the package manager (npm install, pnpm install, etc.)
+4. envFiles = each .env file with optional seedFrom and optional patches
+5. postSetup = the install command for the package manager (npm install, pnpm install, etc.)
 ```
 
 Validate that:
 - Every `port` and `url` patch has a `service` that exists in `services`
 - Every `dockerServices[].ports[].service` exists in `services`
-- Every `seedEnvFiles[].source` is a committed example file with safe local defaults
+- Every `envFiles[].seedFrom` is a committed example file with safe local defaults
 - If using `dockerServices`, Docker is available locally
 - The `portStride` (default 100) doesn't cause port collisions with other local services
 - `maxSlots * portStride` doesn't push ports into reserved ranges (e.g., above 65535)

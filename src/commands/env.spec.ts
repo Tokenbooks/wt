@@ -8,7 +8,7 @@ jest.mock('../core/git', () => ({
 }));
 
 jest.mock('../core/env-patcher', () => ({
-  seedEnvFiles: jest.fn(),
+  seedEnvFileDefaults: jest.fn(),
 }));
 
 jest.mock('./setup', () => ({
@@ -16,13 +16,14 @@ jest.mock('./setup', () => ({
 }));
 
 import { getMainWorktreePath } from '../core/git';
-import { seedEnvFiles } from '../core/env-patcher';
+import { seedEnvFileDefaults } from '../core/env-patcher';
 import { loadConfig } from './setup';
 import { envSeedCommand } from './env';
 import type { WtConfig } from '../types';
 
 const mockGetMainWorktreePath = getMainWorktreePath as jest.MockedFunction<typeof getMainWorktreePath>;
-const mockSeedEnvFiles = seedEnvFiles as jest.MockedFunction<typeof seedEnvFiles>;
+const mockSeedEnvFileDefaults =
+  seedEnvFileDefaults as jest.MockedFunction<typeof seedEnvFileDefaults>;
 const mockLoadConfig = loadConfig as jest.MockedFunction<typeof loadConfig>;
 
 describe('env seed command', () => {
@@ -38,8 +39,7 @@ describe('env seed command', () => {
     maxSlots: 50,
     services: [{ name: 'web', defaultPort: 3000 }],
     dockerServices: [],
-    envFiles: [],
-    seedEnvFiles: [{ source: '.env.example', target: '.env' }],
+    envFiles: [{ source: '.env', seedFrom: '.env.example' }],
     postSetup: [],
     autoInstall: true,
   };
@@ -52,7 +52,7 @@ describe('env seed command', () => {
     stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
     mockGetMainWorktreePath.mockReturnValue(tmpDir);
     mockLoadConfig.mockReturnValue(config);
-    mockSeedEnvFiles.mockReturnValue({
+    mockSeedEnvFileDefaults.mockReturnValue({
       dryRun: false,
       changed: true,
       files: [
@@ -78,8 +78,8 @@ describe('env seed command', () => {
     envSeedCommand(tmpDir, { json: true, dryRun: false });
 
     expect(mockLoadConfig).toHaveBeenCalledWith(tmpDir);
-    expect(mockSeedEnvFiles).toHaveBeenCalledWith(
-      config.seedEnvFiles,
+    expect(mockSeedEnvFileDefaults).toHaveBeenCalledWith(
+      config.envFiles,
       tmpDir,
       { dryRun: false },
     );
@@ -93,7 +93,7 @@ describe('env seed command', () => {
   });
 
   it('passes dry-run through to the seed helper for branch worktrees', () => {
-    mockSeedEnvFiles.mockReturnValue({
+    mockSeedEnvFileDefaults.mockReturnValue({
       dryRun: true,
       changed: true,
       files: [
@@ -108,8 +108,8 @@ describe('env seed command', () => {
 
     envSeedCommand(targetDir, { json: false, dryRun: true });
 
-    expect(mockSeedEnvFiles).toHaveBeenCalledWith(
-      config.seedEnvFiles,
+    expect(mockSeedEnvFileDefaults).toHaveBeenCalledWith(
+      config.envFiles,
       targetDir,
       { dryRun: true },
     );

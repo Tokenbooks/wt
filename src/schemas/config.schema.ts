@@ -30,16 +30,11 @@ export const serviceSchema = z.object({
   defaultPort: z.number().int().positive(),
 });
 
-/** Schema for an env file to copy and patch */
+/** Schema for an env file to seed, copy, and patch */
 export const envFileSchema = z.object({
   source: z.string().min(1),
-  patches: z.array(patchSchema),
-});
-
-/** Schema for a safe example env file to merge into a local env file */
-export const seedEnvFileSchema = z.object({
-  source: z.string().min(1),
-  target: z.string().min(1),
+  seedFrom: z.string().min(1).optional(),
+  patches: z.array(patchSchema).default([]),
 });
 
 export const dockerPortSchema = z.object({
@@ -68,7 +63,6 @@ export const configSchema = z.object({
   services: z.array(serviceSchema).min(1),
   dockerServices: z.array(dockerServiceSchema).default([]),
   envFiles: z.array(envFileSchema),
-  seedEnvFiles: z.array(seedEnvFileSchema).default([]),
   postSetup: z.array(z.string()).default([]),
   autoInstall: z.boolean().default(true),
 });

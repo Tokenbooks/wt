@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { getMainWorktreePath } from '../core/git';
-import { seedEnvFiles, type SeedEnvFilesResult } from '../core/env-patcher';
+import { seedEnvFileDefaults, type SeedEnvFilesResult } from '../core/env-patcher';
 import { extractErrorMessage, formatJson, success, error } from '../output';
 import { loadConfig } from './setup';
 
@@ -17,7 +17,7 @@ export function envSeedCommand(
     const mainRoot = getMainWorktreePath();
     const config = loadConfig(mainRoot);
     const root = path.resolve(targetPath ?? process.cwd());
-    const result = seedEnvFiles(config.seedEnvFiles, root, {
+    const result = seedEnvFileDefaults(config.envFiles, root, {
       dryRun: options.dryRun,
     });
 

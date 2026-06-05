@@ -64,13 +64,11 @@ Build the config file at the repository root:
   "envFiles": [
     {
       "source": "<relative path to .env file>",
+      "seedFrom": "<optional relative path to .env.example>",
       "patches": [
         { "var": "<VAR_NAME>", "type": "<database|port|url|branch>", "service": "<name>" }
       ]
     }
-  ],
-  "seedEnvFiles": [
-    { "source": "<relative path to .env.example>", "target": "<relative path to .env>" }
   ],
   "postSetup": ["<install command>"],
   "autoInstall": true
@@ -79,8 +77,9 @@ Build the config file at the repository root:
 
 Validation rules:
 - Every `port` and `url` patch must have a `service` that exists in `services`
+- `patches` may be omitted for seed-only env files
 - Every `dockerServices[].ports[].service` must exist in `services`
-- Every `seedEnvFiles[].source` should be a committed example file with safe local defaults
+- Every `envFiles[].seedFrom` should be a committed example file with safe local defaults
 - `portStride` * `maxSlots` + max default port must be < 65535
 - `baseDatabaseName` must match the actual DB name in `DATABASE_URL`
 - If using `dockerServices`, Docker must be available locally
@@ -260,7 +259,7 @@ Run:
 wt env seed $1
 ```
 
-Use this in the root worktree or any branch worktree when `.env.example` files have gained new safe local-development variables. It creates missing configured `.env` targets from examples and appends only variables that are missing from existing targets. It never overwrites developer values.
+Use this in the root worktree or any branch worktree when `.env.example` files configured through `envFiles[].seedFrom` have gained new safe local-development variables. It creates missing configured `.env` targets from examples and appends only variables that are missing from existing targets. It never overwrites developer values.
 
 Variants:
 

@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { PatchConfig, PatchContext, SeedEnvFileConfig, WtConfig } from '../types';
+import type { EnvFileConfig, PatchConfig, PatchContext, WtConfig } from '../types';
 
 type PortPatch = Extract<PatchConfig, { type: 'port' }>;
 type UrlPatch = Extract<PatchConfig, { type: 'url' }>;
@@ -176,18 +176,20 @@ function appendMissingEnvLines(
  * Create configured env files from examples and merge missing safe defaults.
  * Existing developer values are never overwritten.
  */
-export function seedEnvFiles(
-  seedFiles: readonly SeedEnvFileConfig[],
+export function seedEnvFileDefaults(
+  envFiles: readonly EnvFileConfig[],
   root: string,
   options: { readonly dryRun: boolean },
 ): SeedEnvFilesResult {
   const files: SeedEnvFileResult[] = [];
 
-  for (const seedFile of seedFiles) {
-    const sourcePath = path.join(root, seedFile.source);
-    const targetPath = path.join(root, seedFile.target);
+  for (const envFile of envFiles) {
+    if (!envFile.seedFrom) continue;
+
+    const sourcePath = path.join(root, envFile.seedFrom);
+    const targetPath = path.join(root, envFile.source);
     if (!fs.existsSync(sourcePath)) {
-      throw new Error(`Seed env source not found: ${seedFile.source}`);
+      throw new Error(`Seed env source not found: ${envFile.seedFrom}`);
     }
 
     const sourceContent = fs.readFileSync(sourcePath, 'utf-8');
@@ -199,8 +201,8 @@ export function seedEnvFiles(
         fs.writeFileSync(targetPath, sourceContent, 'utf-8');
       }
       files.push({
-        source: seedFile.source,
-        target: seedFile.target,
+        source: envFile.seedFrom,
+        target: envFile.source,
         created: true,
         addedVars: sourceAssignments.map((assignment) => assignment.varName),
       });
@@ -221,14 +223,14 @@ export function seedEnvFiles(
     if (missingAssignments.length > 0 && !options.dryRun) {
       fs.writeFileSync(
         targetPath,
-        appendMissingEnvLines(targetContent, seedFile.source, missingAssignments),
+        appendMissingEnvLines(targetContent, envFile.seedFrom, missingAssignments),
         'utf-8',
       );
     }
 
     files.push({
-      source: seedFile.source,
-      target: seedFile.target,
+      source: envFile.seedFrom,
+      target: envFile.source,
       created: false,
       addedVars: missingAssignments.map((assignment) => assignment.varName),
     });
@@ -261,14 +263,14 @@ export function copyAndPatchAllEnvFiles(
     fs.writeFileSync(targetPath, content, 'utf-8');
   }
 
-  seedEnvFiles(config.seedEnvFiles, worktreeRoot, { dryRun: false });
+  seedEnvFileDefaults(config.envFiles, worktreeRoot, { dryRun: false });
 
   for (const envFile of config.envFiles) {
     const targetPath = path.join(worktreeRoot, envFile.source);
     if (!fs.existsSync(targetPath)) continue;
 
     const content = fs.readFileSync(targetPath, 'utf-8');
-    const patched = patchEnvContent(content, envFile.patches, context);
+    const patched = patchEnvContent(content, envFile.patches ?? [], context);
     fs.writeFileSync(targetPath, patched, 'utf-8');
   }
 }
