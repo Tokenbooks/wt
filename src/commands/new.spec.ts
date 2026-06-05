@@ -112,7 +112,6 @@ describe('new command branch selection', () => {
     ],
     dockerServices: [],
     envFiles: [],
-    seedEnvFiles: [],
     postSetup: [],
     autoInstall: true,
   };
@@ -356,7 +355,6 @@ describe('new command rollback on failure', () => {
         patches: [{ var: 'REDIS_URL', type: 'url', service: 'redis' }],
       },
     ],
-    seedEnvFiles: [],
     dockerServices: [
       {
         name: 'redis',

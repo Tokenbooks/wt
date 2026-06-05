@@ -37,7 +37,7 @@ function validateConfig(config: WtConfig): WtConfig {
   }
 
   for (const envFile of config.envFiles) {
-    for (const patch of envFile.patches) {
+    for (const patch of envFile.patches ?? []) {
       if ('service' in patch && !seenServiceNames.has(patch.service)) {
         throw new Error(
           `Patch '${patch.var}' references unknown service '${patch.service}'.`,
