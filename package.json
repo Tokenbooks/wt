@@ -1,6 +1,6 @@
 {
   "name": "@tokenbooks/wt",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Git worktree environment isolation CLI",
   "license": "MIT",
   "repository": {
