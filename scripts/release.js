@@ -128,6 +128,6 @@ if (dryRun) {
   console.log(`Release ${newVersion} committed and tagged locally.`);
   console.log(`Run "git push origin main --follow-tags" when ready.`);
 } else {
-  console.log(`Release ${newVersion} published!`);
-  console.log(`CI: ${REPO_URL}/actions`);
+  console.log(`Release ${newVersion} tagged and pushed.`);
+  console.log(`Publishing runs in CI and waits for approval: ${REPO_URL}/actions`);
 }
