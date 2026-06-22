@@ -176,7 +176,7 @@ wt new $1
 ```
 
 If it fails, check `wt doctor` for diagnostics. Common issues:
-- All slots occupied → suggest `wt list` to find stale ones, then `wt remove` or `wt prune`
+- All slots occupied → run `wt audit` to see which worktrees are merged and safe to remove, then `wt prune --merged` (or `wt remove`)
 - Database connection failed → check that Postgres is running and `DATABASE_URL` in root `.env` is correct
 
 ---
@@ -219,6 +219,26 @@ Use this when worktree directories were deleted manually and Git already marks t
 Flags:
 - `--dry-run` to preview what would be pruned
 - `--keep-db` to keep databases for matching managed allocations
+- `--merged` to also remove live worktrees whose branch is already merged into the base ref (audit-confirmed and clean only — never deletes uncommitted work). This is the "act on it" companion to `wt audit`.
+
+---
+
+### `audit` — Classify worktrees by merge state
+
+Run:
+```bash
+wt audit $@
+```
+
+Use this when slots are full or the workspace is cluttered and you want to know which worktrees are finished and safe to delete. It classifies each worktree by how its branch relates to the base ref (`origin/main`, then `main`) and prints a copyable `wt remove` for the safe ones. Deletion safety is grounded in git (reachable from the base ref, or folded into a retained branch), not GitHub PR state; trees with uncommitted work are never suggested.
+
+Flags:
+- `--no-fetch` to skip refreshing `origin/main` first
+- `--base <ref>` to audit against a different base
+- `--ignore-dirty <paths...>` to treat matching path fragments as never-real dirt
+- `--json` for machine-readable verdicts, e.g. `wt audit --json | jq '.data[] | select(.verdict=="delete-merged")'`
+
+To act on it: copy the printed `wt remove` line, or run `wt prune --merged` to remove every audit-confirmed-safe worktree at once.
 
 ---
 
@@ -280,8 +300,9 @@ Available commands:
   /wt new <branch>      — Create a worktree with isolated DB, Docker services, and ports
   /wt open <slot|branch> — Open a worktree by slot or branch (creates if not found)
   /wt list              — List all worktree allocations
+  /wt audit             — Classify worktrees by merge state; suggest which are safe to remove
   /wt remove <targets...>|--all — Remove one or more worktrees and clean up resources
-  /wt prune [--dry-run] — Prune Git-prunable worktrees and clean up matching managed resources
+  /wt prune [--dry-run] [--merged] — Prune Git-prunable (and, with --merged, audit-confirmed merged) worktrees
   /wt doctor            — Diagnose and fix environment issues
   /wt setup [path]      — Set up an existing worktree
   /wt env seed [path]   — Create/fill safe env defaults from examples

@@ -302,6 +302,40 @@ export function auditWorktrees(slots: readonly WtSlot[], deps: AuditDeps): Workt
   return slots.map((slot) => auditSlot(slot, deps, metaMap));
 }
 
+/** Options controlling a full audit run (shared by the command and prune). */
+export interface AuditRunOptions {
+  /** Fetch origin/main before auditing (skipped when an explicit base is given). */
+  readonly fetch: boolean;
+  /** Override the base ref instead of resolving origin/main → main. */
+  readonly base?: string;
+  /** Worktree-relative paths whose dirtiness is never real work. */
+  readonly ignoreDirtyPaths?: readonly string[];
+}
+
+/**
+ * Audit the given slots, returning only those unambiguously safe to delete
+ * (reachable from the base ref or folded into a retained branch, and clean).
+ * This is the discovery half of `wt prune --merged`.
+ */
+export function findDeletableWorktrees(
+  repoDir: string,
+  slots: readonly WtSlot[],
+  options: AuditRunOptions,
+): WorktreeAudit[] {
+  if (options.fetch && !options.base) {
+    fetchBaseRef(repoDir);
+  }
+  const base = options.base ?? resolveBaseRef(repoDir);
+  const prMap = loadPrStates(repoDir);
+  const audits = auditWorktrees(slots, {
+    repoDir,
+    base,
+    ignoreDirtyPaths: options.ignoreDirtyPaths ?? [],
+    prMap,
+  });
+  return audits.filter((a) => a.verdict === 'delete-merged' || a.verdict === 'delete-consolidated');
+}
+
 /** Best-effort refresh of `origin/main` so the audit reflects the remote. */
 export function fetchBaseRef(repoDir: string): void {
   try {

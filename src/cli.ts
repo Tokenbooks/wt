@@ -118,12 +118,14 @@ program
   .description('Prune Git-prunable worktrees and clean up managed resources')
   .option('--dry-run', 'Show what would be pruned without changing anything', false)
   .option('--keep-db', 'Keep databases for managed worktrees (do not drop)', false)
+  .option('--merged', 'Also remove live worktrees whose branch is merged into the base ref (audit-confirmed, clean only)', false)
   .option('--json', 'Output as JSON', false)
   .action(async (opts) => {
     await pruneCommand({
       json: opts.json,
       keepDb: opts.keepDb,
       dryRun: opts.dryRun,
+      merged: opts.merged,
     });
   });
 

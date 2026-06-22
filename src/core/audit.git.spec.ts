@@ -7,6 +7,7 @@ import {
   auditWorktrees,
   containingBranches,
   deletableSlots,
+  findDeletableWorktrees,
   mergeMethod,
   realDirtyLines,
   resolveBaseRef,
@@ -188,5 +189,17 @@ describe('auditWorktrees (real git, real worktrees)', () => {
 
     expect(new Map(audits.map((a) => [a.slot, a])).get(1)?.verdict).toBe('review-uncommitted');
     expect(deletableSlots(audits)).toEqual([]);
+  });
+
+  it('findDeletableWorktrees returns only the merged, clean slot', () => {
+    const deletable = findDeletableWorktrees(dir, slots(), { fetch: false, base: 'main' });
+    expect(deletable.map((a) => a.slot)).toEqual([1]);
+    expect(deletable[0]?.verdict).toBe('delete-merged');
+  });
+
+  it('findDeletableWorktrees excludes a merged slot that has uncommitted work', () => {
+    fs.writeFileSync(path.join(wtMerged, 'scratch.txt'), 'dirty\n');
+    const deletable = findDeletableWorktrees(dir, slots(), { fetch: false, base: 'main' });
+    expect(deletable).toEqual([]);
   });
 });
