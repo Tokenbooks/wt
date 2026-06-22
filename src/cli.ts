@@ -6,6 +6,7 @@ import { setupCommand } from './commands/setup';
 import { removeCommand } from './commands/remove';
 import { pruneCommand } from './commands/prune';
 import { listCommand } from './commands/list';
+import { auditCommand } from './commands/audit';
 import { doctorCommand } from './commands/doctor';
 import { openCommand } from './commands/open';
 import { envSeedCommand } from './commands/env';
@@ -123,6 +124,33 @@ program
       json: opts.json,
       keepDb: opts.keepDb,
       dryRun: opts.dryRun,
+    });
+  });
+
+program
+  .command('audit')
+  .description('Classify worktrees by how their branch relates to the base ref and suggest which are safe to remove')
+  .option('--json', 'Output as JSON', false)
+  .option('--no-fetch', 'Skip fetching origin/main before auditing')
+  .option('--base <ref>', 'Base ref to audit against (default: origin/main, then main)')
+  .option('--ignore-dirty <paths...>', 'Worktree path fragments to treat as never-real dirt (e.g. .mcp.json)', [])
+  .addHelpText(
+    'after',
+    [
+      '',
+      'Examples:',
+      '  wt audit',
+      '  wt audit --no-fetch',
+      '  wt audit --json | jq \'.data[] | select(.verdict=="delete-merged")\'',
+      '',
+    ].join('\n'),
+  )
+  .action((opts) => {
+    auditCommand({
+      json: opts.json,
+      fetch: opts.fetch,
+      base: opts.base,
+      ignoreDirty: opts.ignoreDirty,
     });
   });
 
