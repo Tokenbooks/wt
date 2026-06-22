@@ -18,6 +18,11 @@ jest.mock('../core/git', () => ({
   getMainWorktreePath: jest.fn(),
   listPrunableWorktrees: jest.fn(),
   pruneWorktrees: jest.fn(),
+  removeWorktree: jest.fn(),
+}));
+
+jest.mock('../core/audit', () => ({
+  findDeletableWorktrees: jest.fn(),
 }));
 
 jest.mock('../core/docker-services', () => ({
@@ -32,7 +37,8 @@ jest.mock('./setup', () => ({
 
 import { readRegistry, writeRegistry, removeAllocation, findByPath } from '../core/registry';
 import { dropDatabase } from '../core/database';
-import { getMainWorktreePath, listPrunableWorktrees, pruneWorktrees } from '../core/git';
+import { getMainWorktreePath, listPrunableWorktrees, pruneWorktrees, removeWorktree } from '../core/git';
+import { findDeletableWorktrees, type WorktreeAudit } from '../core/audit';
 import {
   removeDockerServices,
   listManagedDockerProjectsForRepo,
@@ -50,6 +56,8 @@ const mockDropDatabase = dropDatabase as jest.MockedFunction<typeof dropDatabase
 const mockGetMainWorktreePath = getMainWorktreePath as jest.MockedFunction<typeof getMainWorktreePath>;
 const mockListPrunableWorktrees = listPrunableWorktrees as jest.MockedFunction<typeof listPrunableWorktrees>;
 const mockPruneWorktrees = pruneWorktrees as jest.MockedFunction<typeof pruneWorktrees>;
+const mockRemoveWorktree = removeWorktree as jest.MockedFunction<typeof removeWorktree>;
+const mockFindDeletableWorktrees = findDeletableWorktrees as jest.MockedFunction<typeof findDeletableWorktrees>;
 const mockRemoveDockerServices = removeDockerServices as jest.MockedFunction<
   typeof removeDockerServices
 >;
@@ -132,6 +140,7 @@ describe('pruneCommand', () => {
     mockUsesDockerServices.mockReturnValue(true);
     mockLoadConfig.mockReturnValue(config);
     mockListPrunableWorktrees.mockReturnValue([]);
+    mockFindDeletableWorktrees.mockReturnValue([]);
     process.exitCode = 0;
   });
 
@@ -364,5 +373,97 @@ describe('pruneCommand', () => {
     expect(output.success).toBe(true);
     expect(output.data.prunedManaged).toEqual([]);
     expect(output.data.prunedOrphanDockerProjects).toEqual([]);
+  });
+
+  describe('--merged', () => {
+    const deletableAudit = (slot: number, worktreePath: string, dbName: string): WorktreeAudit => ({
+      slot,
+      path: worktreePath,
+      branch: `feat/${slot}`,
+      dbName,
+      mergeMethod: 'ancestor',
+      containedIn: [],
+      realDirty: [],
+      onRemote: true,
+      locked: false,
+      lockedReason: '',
+      pr: null,
+      verdict: 'delete-merged',
+      reason: 'in base ref (ancestor)',
+    });
+
+    it('does not consult the audit unless --merged is set', async () => {
+      await pruneCommand({ json: true, keepDb: false, dryRun: false });
+      expect(mockFindDeletableWorktrees).not.toHaveBeenCalled();
+    });
+
+    it('removes audit-confirmed merged worktrees that still exist on disk', async () => {
+      const livePath = path.join(tmpDir, 'wt-merged');
+      fs.mkdirSync(livePath);
+      mockReadRegistry.mockReturnValue({
+        version: 1,
+        allocations: { '3': { ...allocation, worktreePath: livePath, dbName: 'app_wt3' } },
+      });
+      mockFindDeletableWorktrees.mockReturnValue([deletableAudit(3, livePath, 'app_wt3')]);
+
+      await pruneCommand({ json: true, keepDb: false, dryRun: false, merged: true });
+
+      expect(mockFindDeletableWorktrees).toHaveBeenCalledTimes(1);
+      expect(mockDropDatabase).toHaveBeenCalledWith(
+        'postgresql://user:pw@localhost:5432/myapp',
+        'app_wt3',
+        'myapp',
+        expect.any(Function),
+      );
+      expect(mockRemoveWorktree).toHaveBeenCalledWith(livePath, expect.any(Function));
+      expect(mockRemoveAllocation).toHaveBeenCalledWith(expect.anything(), 3);
+      expect(mockWriteRegistry).toHaveBeenCalled();
+
+      const output = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] ?? 'null') as {
+        data: { prunedManaged: Array<{ slot: number; reasonSource: string }> };
+      };
+      expect(output.data.prunedManaged).toHaveLength(1);
+      expect(output.data.prunedManaged[0]?.slot).toBe(3);
+      expect(output.data.prunedManaged[0]?.reasonSource).toBe('merged');
+    });
+
+    it('previews merged worktrees in dry-run without removing them', async () => {
+      const livePath = path.join(tmpDir, 'wt-merged');
+      fs.mkdirSync(livePath);
+      mockReadRegistry.mockReturnValue({
+        version: 1,
+        allocations: { '3': { ...allocation, worktreePath: livePath, dbName: 'app_wt3' } },
+      });
+      mockFindDeletableWorktrees.mockReturnValue([deletableAudit(3, livePath, 'app_wt3')]);
+
+      await pruneCommand({ json: true, keepDb: false, dryRun: true, merged: true });
+
+      expect(mockRemoveWorktree).not.toHaveBeenCalled();
+      expect(mockDropDatabase).not.toHaveBeenCalled();
+      const output = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] ?? 'null') as {
+        data: { merged: Array<{ slot: number }> };
+      };
+      expect(output.data.merged).toHaveLength(1);
+      expect(output.data.merged[0]?.slot).toBe(3);
+    });
+
+    it('does not run git worktree remove for a merged candidate whose path is gone', async () => {
+      // A gone path is the mechanical (missing-path) prune's job, so the merged
+      // path must never call removeWorktree on it.
+      const gonePath = path.join(tmpDir, 'gone');
+      mockReadRegistry.mockReturnValue({
+        version: 1,
+        allocations: { '4': { ...allocation, worktreePath: gonePath, dbName: 'app_wt4' } },
+      });
+      mockFindDeletableWorktrees.mockReturnValue([deletableAudit(4, gonePath, 'app_wt4')]);
+
+      await pruneCommand({ json: true, keepDb: false, dryRun: false, merged: true });
+
+      expect(mockRemoveWorktree).not.toHaveBeenCalled();
+      const output = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] ?? 'null') as {
+        data: { prunedManaged: Array<{ reasonSource: string }> };
+      };
+      expect(output.data.prunedManaged.filter((p) => p.reasonSource === 'merged')).toEqual([]);
+    });
   });
 });

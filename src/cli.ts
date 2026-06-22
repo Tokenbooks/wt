@@ -6,6 +6,7 @@ import { setupCommand } from './commands/setup';
 import { removeCommand } from './commands/remove';
 import { pruneCommand } from './commands/prune';
 import { listCommand } from './commands/list';
+import { auditCommand } from './commands/audit';
 import { doctorCommand } from './commands/doctor';
 import { openCommand } from './commands/open';
 import { envSeedCommand } from './commands/env';
@@ -117,12 +118,41 @@ program
   .description('Prune Git-prunable worktrees and clean up managed resources')
   .option('--dry-run', 'Show what would be pruned without changing anything', false)
   .option('--keep-db', 'Keep databases for managed worktrees (do not drop)', false)
+  .option('--merged', 'Also remove live worktrees whose branch is merged into the base ref (audit-confirmed, clean only)', false)
   .option('--json', 'Output as JSON', false)
   .action(async (opts) => {
     await pruneCommand({
       json: opts.json,
       keepDb: opts.keepDb,
       dryRun: opts.dryRun,
+      merged: opts.merged,
+    });
+  });
+
+program
+  .command('audit')
+  .description('Classify worktrees by how their branch relates to the base ref and suggest which are safe to remove')
+  .option('--json', 'Output as JSON', false)
+  .option('--no-fetch', 'Skip fetching origin/main before auditing')
+  .option('--base <ref>', 'Base ref to audit against (default: origin/main, then main)')
+  .option('--ignore-dirty <paths...>', 'Worktree path fragments to treat as never-real dirt (e.g. .mcp.json)', [])
+  .addHelpText(
+    'after',
+    [
+      '',
+      'Examples:',
+      '  wt audit',
+      '  wt audit --no-fetch',
+      '  wt audit --json | jq \'.data[] | select(.verdict=="delete-merged")\'',
+      '',
+    ].join('\n'),
+  )
+  .action((opts) => {
+    auditCommand({
+      json: opts.json,
+      fetch: opts.fetch,
+      base: opts.base,
+      ignoreDirty: opts.ignoreDirty,
     });
   });
 

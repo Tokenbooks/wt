@@ -144,6 +144,10 @@ wt remove .worktrees/feat-my-feature
 
 # Prune worktrees Git already considers stale
 wt prune
+
+# See which worktrees are merged and safe to remove (then remove them)
+wt audit
+wt prune --merged
 ```
 
 ### 5. Claude Code skill (optional)
@@ -258,7 +262,7 @@ Accepts either paths (`.worktrees/feat-my-feature`) or slot numbers (`3`), not b
 - `wt remove "1, 2"`
 - `wt remove --all`
 
-### `wt prune [--dry-run] [--keep-db] [--json]`
+### `wt prune [--dry-run] [--keep-db] [--merged] [--json]`
 
 Finds worktrees that Git already marks as prunable, then:
 
@@ -269,7 +273,22 @@ Finds worktrees that Git already marks as prunable, then:
 
 This is mainly for worktrees that were deleted manually from disk instead of through `wt remove`. It also recovers Docker networks orphaned by container reaps (e.g. `docker rm -f`, Docker Desktop resets, partial `wt new` failures) — these would otherwise consume subnet slots from Docker's default address pool and eventually surface as `all predefined address pools have been fully subnetted` on the next `wt new`.
 
-Use `--dry-run` to preview what would be pruned.
+With `--merged`, prune additionally removes **live** worktrees that `wt audit` classifies as safe to delete — branches already in the base ref (merged or squashed) or folded into a retained local branch. The audit excludes any worktree with uncommitted work, so `--merged` never deletes unsaved changes. This is the "act on the audit" companion to `wt audit`.
+
+Use `--dry-run` to preview what would be pruned (including the `--merged` candidates).
+
+### `wt audit [--json] [--no-fetch] [--base <ref>] [--ignore-dirty <paths...>]`
+
+Classifies every registered worktree by how its branch relates to the base ref (`origin/main`, falling back to `main`) and prints a copyable `wt remove` for the trees that are unambiguously safe to delete. Deletion safety is grounded in git, not GitHub PR state — a tip is deletable when it is reachable from the base ref (a merge or squash) or folded into another retained local branch, and never when the worktree has real uncommitted work.
+
+Verdicts: `delete-merged`, `delete-consolidated`, `keep-open-pr`, `keep-wip`, `review-uncommitted`, `review-merged-diverged`, `review-closed-pr`. When `gh` is available, open/closed/merged PR state is added as context.
+
+- `--no-fetch` skips refreshing `origin/main` first (audits the local ref).
+- `--base <ref>` audits against a different base.
+- `--ignore-dirty <paths...>` treats matching path fragments as never-real dirt (e.g. a per-worktree `.mcp.json`).
+- `--json` emits the full per-worktree audit for scripting: `wt audit --json | jq '.data[] | select(.verdict=="delete-merged")'`.
+
+To act on the result, copy the printed `wt remove` line, or run `wt prune --merged` to remove all audit-confirmed-safe worktrees in one step.
 
 ### `wt list [--json]`
 

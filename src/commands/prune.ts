@@ -6,7 +6,9 @@ import {
   getMainWorktreePath,
   listPrunableWorktrees,
   pruneWorktrees,
+  removeWorktree,
 } from '../core/git';
+import { findDeletableWorktrees, type WtSlot } from '../core/audit';
 import {
   listManagedDockerProjectsForRepo,
   removeDockerServices,
@@ -21,9 +23,10 @@ interface PruneOptions {
   readonly json: boolean;
   readonly keepDb: boolean;
   readonly dryRun: boolean;
+  readonly merged?: boolean;
 }
 
-type PrunableReasonSource = 'git' | 'missing-path';
+type PrunableReasonSource = 'git' | 'missing-path' | 'merged';
 
 interface PrunableManagedAllocation {
   readonly slot: number;
@@ -137,8 +140,36 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
     const orphanDockerProjects: ManagedDockerProjectSummary[] = listManagedDockerProjectsForRepo(mainRoot)
       .filter((project) => !activeSlots.has(project.slot));
 
+    // --merged: additionally remove live worktrees whose branch is already in
+    // the base ref (or folded into a retained branch). The audit excludes any
+    // tree with uncommitted work, so this never deletes unsaved changes.
+    const mergedManaged: PrunableManagedAllocation[] = [];
+    if (options.merged) {
+      const slots: WtSlot[] = Object.entries(registry.allocations).map(([slotStr, alloc]) => ({
+        slot: Number(slotStr),
+        path: alloc.worktreePath,
+        branch: alloc.branchName,
+        dbName: alloc.dbName,
+      }));
+      for (const audit of findDeletableWorktrees(mainRoot, slots, { fetch: true })) {
+        if (seenSlots.has(audit.slot)) {
+          continue;
+        }
+        const alloc = registry.allocations[String(audit.slot)];
+        // Only act on live worktrees; a gone path is the mechanical prune's job.
+        if (!alloc || !fs.existsSync(alloc.worktreePath)) {
+          continue;
+        }
+        mergedManaged.push({ slot: audit.slot, allocation: alloc, reason: audit.reason, reasonSource: 'merged' });
+        seenSlots.add(audit.slot);
+      }
+    }
+
     const nothingToDo =
-      managed.length === 0 && unmanaged.length === 0 && orphanDockerProjects.length === 0;
+      managed.length === 0 &&
+      unmanaged.length === 0 &&
+      orphanDockerProjects.length === 0 &&
+      mergedManaged.length === 0;
 
     if (options.dryRun) {
       const payload = {
@@ -146,6 +177,7 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
         managed,
         unmanaged,
         orphanDockerProjects,
+        merged: mergedManaged,
       };
       if (options.json) {
         console.log(formatJson(success(payload)));
@@ -155,9 +187,10 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
         console.log('Nothing to prune.');
         return;
       }
-      const totalActions = managed.length + unmanaged.length + orphanDockerProjects.length;
+      const totalActions =
+        managed.length + unmanaged.length + orphanDockerProjects.length + mergedManaged.length;
       console.log(`Would prune ${totalActions} item${totalActions === 1 ? '' : 's'}:`);
-      for (const item of managed) {
+      for (const item of [...managed, ...mergedManaged]) {
         console.log(`  Slot ${item.slot}: ${item.allocation.worktreePath}`);
         console.log(`    Reason: ${item.reason}`);
         console.log(`    Database: ${item.allocation.dbName}${options.keepDb ? ' (kept)' : ' (dropped)'}`);
@@ -199,7 +232,7 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
       return;
     }
 
-    const dbContext = options.keepDb || managed.length === 0
+    const dbContext = options.keepDb || (managed.length === 0 && mergedManaged.length === 0)
       ? null
       : {
         databaseUrl: readDatabaseUrl(mainRoot),
@@ -226,6 +259,45 @@ export async function pruneCommand(options: PruneOptions): Promise<void> {
         const dockerRemoved = item.allocation.docker !== undefined || usesDockerServices(config)
           ? removeDockerServices(mainRoot, item.slot, log)
           : false;
+
+        registry = removeAllocation(registry, item.slot);
+        prunedManaged.push({
+          slot: item.slot,
+          worktreePath: item.allocation.worktreePath,
+          dbName: item.allocation.dbName,
+          dbDropped: dbContext !== null,
+          dockerRemoved,
+          reason: item.reason,
+          reasonSource: item.reasonSource,
+        });
+      } catch (err) {
+        failed.push({
+          worktreePath: item.allocation.worktreePath,
+          message: extractErrorMessage(err),
+        });
+      }
+    }
+
+    for (const item of mergedManaged) {
+      try {
+        if (dbContext !== null) {
+          await dropDatabase(
+            dbContext.databaseUrl,
+            item.allocation.dbName,
+            dbContext.baseDatabaseName,
+            (statement) => log(`Running SQL: ${statement}`),
+          );
+        } else {
+          log(`Skipping database drop for '${item.allocation.dbName}' (${options.keepDb ? '--keep-db' : 'no config'}).`);
+        }
+
+        const dockerRemoved = item.allocation.docker !== undefined || usesDockerServices(config)
+          ? removeDockerServices(mainRoot, item.slot, log)
+          : false;
+
+        // Unlike the mechanical prune above, these worktrees are live on disk,
+        // so remove the working tree and its Git metadata directly.
+        removeWorktree(item.allocation.worktreePath, (command) => log(`Running: ${command}`));
 
         registry = removeAllocation(registry, item.slot);
         prunedManaged.push({
