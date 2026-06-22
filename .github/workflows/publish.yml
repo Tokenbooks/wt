@@ -62,3 +62,16 @@ jobs:
 
       # prepack (clean + tsc) rebuilds dist before packing.
       - run: npm publish --access public
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release
+    steps:
+      # gh is preinstalled on the runner; notes are generated from the PRs
+      # merged since the previous release. No third-party action.
+      - name: Create GitHub Release with generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --verify-tag --generate-notes --latest
