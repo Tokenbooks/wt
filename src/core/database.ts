@@ -68,6 +68,22 @@ export async function createDatabase(
   });
 }
 
+/** Drops a database's logical replication slots; caller must make them inactive first. */
+async function dropReplicationSlots(
+  client: Client,
+  dbName: string,
+  logSql?: SqlLogger,
+): Promise<void> {
+  const selectSql = 'SELECT slot_name FROM pg_replication_slots WHERE database = $1';
+  logSql?.(formatQueryLog(selectSql, [dbName]));
+  const result = await client.query<{ slot_name: string }>(selectSql, [dbName]);
+  for (const { slot_name } of result.rows) {
+    const dropSlotSql = 'SELECT pg_drop_replication_slot($1)';
+    logSql?.(formatQueryLog(dropSlotSql, [slot_name]));
+    await client.query(dropSlotSql, [slot_name]);
+  }
+}
+
 /** Drop a database if it exists. Refuses to drop the template database. */
 export async function dropDatabase(
   databaseUrl: string,
@@ -84,6 +100,8 @@ export async function dropDatabase(
       'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()';
     logSql?.(formatQueryLog(terminateSql, [dbName]));
     await client.query(terminateSql, [dbName]);
+
+    await dropReplicationSlots(client, dbName, logSql);
 
     const dropSql = `DROP DATABASE IF EXISTS ${quoteIdentifier(dbName)}`;
     logSql?.(formatQueryLog(dropSql));
