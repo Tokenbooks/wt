@@ -218,6 +218,11 @@ export async function removeCommand(
       try {
         log(`Removing slot ${resolved.slot} (${resolved.worktreePath})`);
 
+        // Stop Docker (e.g. Electric) before the DB drop so its replication slot is inactive.
+        const dockerRemoved = dockerServicesEnabled || resolved.dockerProjectName !== undefined
+          ? removeDockerServices(mainRoot, resolved.slot, log)
+          : false;
+
         if (dbContext !== null) {
           await dropDatabase(
             dbContext.databaseUrl,
@@ -228,10 +233,6 @@ export async function removeCommand(
         } else {
           log(`Skipping database drop for '${resolved.dbName}' (--keep-db).`);
         }
-
-        const dockerRemoved = dockerServicesEnabled || resolved.dockerProjectName !== undefined
-          ? removeDockerServices(mainRoot, resolved.slot, log)
-          : false;
 
         if (fs.existsSync(resolved.worktreePath)) {
           removeWorktree(
