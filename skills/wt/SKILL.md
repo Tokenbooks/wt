@@ -168,12 +168,17 @@ Tip: use `cd $(wt open $1)` to jump into the worktree directory.
 
 ---
 
-### `new $1` — Create a new worktree
+### `new [branch] [--base <ref>]` — Create a new worktree
 
 Run:
 ```bash
-wt new $1
+wt new $@
 ```
+
+Branch handling:
+- `wt new <branch>` — checks out `<branch>` if it exists locally, else fetches/tracks `origin/<branch>`, else creates a fresh local branch off `HEAD`.
+- `wt new <branch> --base <ref>` — when the branch is new, forks it from `<ref>` (a branch, tag, or commit) instead of `HEAD`. Ignored with a warning if the branch already exists. Not auto-fetched — `git fetch` first to fork from a fresh remote tip.
+- `wt new --base <ref>` (or bare `wt new`) — no name given, so it auto-creates a throwaway branch like `main-20260723-nemanull` forked from `<ref>` (default `origin/main`, then `main`). Use this for a clean scratch worktree without naming a branch.
 
 If it fails, check `wt doctor` for diagnostics. Common issues:
 - All slots occupied → run `wt audit` to see which worktrees are merged and safe to remove, then `wt prune --merged` (or `wt remove`)
@@ -297,7 +302,7 @@ Show a brief help:
 ```
 Available commands:
   /wt init              — Set up wt in a new repository (discovers env files, generates config)
-  /wt new <branch>      — Create a worktree with isolated DB, Docker services, and ports
+  /wt new [branch] [--base <ref>] — Create a worktree (auto-names a scratch branch off --base when no branch is given)
   /wt open <slot|branch> — Open a worktree by slot or branch (creates if not found)
   /wt list              — List all worktree allocations
   /wt audit             — Classify worktrees by merge state; suggest which are safe to remove

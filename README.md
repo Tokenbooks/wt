@@ -163,16 +163,31 @@ Then use `/wt init`, `/wt new feat/foo`, `/wt doctor`, etc. inside Claude Code.
 
 ## Commands
 
-### `wt new <branch> [--slot N] [--no-install] [--json]`
+### `wt new [branch] [--base <ref>] [--slot N] [--no-install] [--json]`
 
 Creates a new git worktree and sets up its isolated environment:
 
-1. Allocates the next available slot (or uses `--slot N`)
-2. Checks whether `origin/<branch>` exists; if it does, fetches it and creates a tracking local branch, otherwise creates a fresh local branch
+1. Resolves the branch:
+   - An existing **local** branch is checked out as-is.
+   - Otherwise, if `origin/<branch>` exists, it is fetched and a tracking local branch is created.
+   - Otherwise a **fresh local branch** is created. By default it forks from the current `HEAD`; pass `--base <ref>` to fork it from a specific branch, tag, or commit instead (e.g. `wt new feat/login --base main`). `--base` is ignored (with a warning) when the branch already exists.
+   - If `[branch]` is **omitted**, a throwaway branch is auto-named from the base and today's date — like `main-20260723-nemanull` — and forked from `--base` (defaulting to `origin/main`, then `main`). Use this for a clean scratch environment without inventing a name: `wt new --base main`. Because wt invented the name, it is always a fresh branch: no `origin` lookup, and a same-named remote branch is never adopted.
+2. Allocates the next available slot (or uses `--slot N`)
 3. Creates a new Postgres database from the main DB as template
 4. Copies configured `.env` files, fills missing safe defaults from examples, and patches each with slot-specific values
 5. Starts configured Docker services after the slot database exists
 6. Runs `postSetup` commands (unless `--no-install`)
+
+```bash
+wt new feat/login                 # create/checkout feat/login (forks from HEAD if new)
+wt new feat/login --base main     # new branch forked from main
+wt new --base main                # throwaway branch e.g. main-20260723-nemanull off main
+wt new                            # same, base defaults to origin/main then main
+```
+
+`--base` accepts any committish a fresh branch can fork from (a branch, tag, or commit SHA). When it is actually used — that is, when the branch is new — it is resolved before any slot, database, Docker service, or worktree is created, so a typo fails cleanly with nothing to clean up. It is **not** auto-fetched: to fork from the latest remote tip, `git fetch` first (or pass `--base origin/<branch>` once it is present locally).
+
+If a failure happens partway through setup, the worktree, database, and Docker services are rolled back. An auto-named branch is deleted too, since wt invented it; a branch you named is left in place.
 
 ### `wt open <slot-or-branch> [--no-install] [--json]`
 

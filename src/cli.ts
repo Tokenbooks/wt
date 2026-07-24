@@ -24,15 +24,29 @@ program
 program
   .command('new')
   .description('Create a new worktree with isolated environment')
-  .argument('<branch>', 'Branch name to create or checkout')
+  .argument('[branch]', 'Branch to create or checkout; auto-generated from --base when omitted')
   .option('--slot <n>', 'Force a specific slot number')
+  .option('--base <ref>', 'Start point for a newly created branch (branch/tag/commit); seeds the auto-name when [branch] is omitted; ignored if the branch already exists')
   .option('--no-install', 'Skip post-setup commands')
   .option('--json', 'Output as JSON', false)
-  .action(async (branch: string, opts) => {
+  .addHelpText(
+    'after',
+    [
+      '',
+      'Examples:',
+      '  wt new feat/login                 # create/checkout feat/login (forks from HEAD if new)',
+      '  wt new feat/login --base main     # new branch forked from main',
+      '  wt new --base main                # throwaway branch e.g. main-20260723-nemanull off main',
+      '  wt new                            # same, base defaults to origin/main then main',
+      '',
+    ].join('\n'),
+  )
+  .action(async (branch: string | undefined, opts) => {
     await newCommand(branch, {
       json: opts.json,
       install: opts.install,
       slot: opts.slot,
+      base: opts.base,
     });
   });
 
