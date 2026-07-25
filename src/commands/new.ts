@@ -16,9 +16,13 @@ import {
   createWorktree,
   getBranchName,
   removeWorktree,
+  deleteBranch,
   resolveWorktreeBranch,
+  generateAutoBranchName,
+  assertRefExists,
   type WorktreeBranchSelection,
 } from '../core/git';
+import { resolveBaseRef } from '../core/audit';
 import { extractErrorMessage, formatJson, formatSetupSummary, success, error } from '../output';
 import { loadConfig } from './setup';
 import type { Allocation, PortDrift } from '../types';
@@ -29,6 +33,7 @@ interface NewOptions {
   readonly json: boolean;
   readonly install: boolean;
   readonly slot?: string;
+  readonly base?: string;
 }
 
 export interface CreateWorktreeResult {
@@ -36,6 +41,7 @@ export interface CreateWorktreeResult {
   readonly allocation: Allocation;
   readonly branchSelection: WorktreeBranchSelection;
   readonly portDrifts: readonly PortDrift[];
+  readonly autoNamed: boolean;
 }
 
 /** Read DATABASE_URL from the main worktree's .env file */
@@ -49,10 +55,26 @@ function readDatabaseUrl(mainRoot: string): string {
   return match[1];
 }
 
+/**
+ * Fork point for an auto-named branch when the user did not pass `--base`.
+ * Re-phrases the audit helper's failure, which talks about auditing, into
+ * advice that makes sense for `wt new`.
+ */
+function resolveDefaultBase(mainRoot: string): string {
+  try {
+    return resolveBaseRef(mainRoot);
+  } catch {
+    throw new Error(
+      "no default base found (looked for 'origin/main', then 'main'); " +
+      'pass --base <ref> or name a branch',
+    );
+  }
+}
+
 /** Core worktree creation logic — returns the result for programmatic use */
 export async function createNewWorktree(
-  branchName: string,
-  options: { install: boolean; slot?: string; quiet?: boolean },
+  branchNameArg: string | undefined,
+  options: { install: boolean; slot?: string; quiet?: boolean; base?: string },
 ): Promise<CreateWorktreeResult> {
   const log = options.quiet
     ? () => {}
@@ -63,7 +85,9 @@ export async function createNewWorktree(
   const config = loadConfig(mainRoot);
   let registry = readRegistry(mainRoot);
 
-  // Determine slot — port availability no longer affects slot choice.
+  // Determine slot first — it is pure bookkeeping over the registry, so an
+  // unusable --slot fails before any git lookup hits the network or writes a
+  // remote-tracking ref. Port availability no longer affects slot choice.
   let slot: number;
   if (options.slot !== undefined) {
     slot = parseInt(options.slot, 10);
@@ -84,16 +108,43 @@ export async function createNewWorktree(
     slot = available;
   }
 
-  log(`Creating worktree for '${branchName}' in slot ${slot}...`);
+  // Resolve the branch name and its fork point before allocating anything. When
+  // no name is given we auto-name a throwaway branch (e.g. main-20260723-nemanull)
+  // and fork it off the base ref; validating the base up front means a bad
+  // --base fails cleanly before any database, Docker, or worktree resources exist.
+  let base = options.base;
+  let branchName: string;
+  let autoNamed = false;
+  if (branchNameArg !== undefined) {
+    branchName = branchNameArg;
+  } else {
+    base = base ?? resolveDefaultBase(mainRoot);
+    branchName = generateAutoBranchName(base);
+    autoNamed = true;
+  }
 
   const basePath = path.join(mainRoot, config.baseWorktreePath);
   const branchSelection = resolveWorktreeBranch(
     branchName,
     (command) => log(`Running: ${command}`),
+    // A name wt invented is meant to be a fresh branch off the base, so an
+    // unrelated origin branch that happens to match must not be adopted.
+    { base, skipOriginLookup: autoNamed },
   );
   if (branchSelection.originCheckError) {
     warn(`Failed to check origin for '${branchName}': ${branchSelection.originCheckError}`);
   }
+  if (base !== undefined) {
+    if (branchSelection.source === 'local-new') {
+      // The base is only used when we create a fresh branch; fail early on a typo.
+      assertRefExists(base);
+    } else if (options.base !== undefined) {
+      // Only mention the flag if the user actually passed one.
+      warn(`Branch '${branchName}' already exists; --base ${options.base} ignored.`);
+    }
+  }
+
+  log(`Creating worktree for '${branchName}' in slot ${slot}...`);
   log(describeBranchSelection(branchSelection));
 
   const dbName = calculateDbName(slot, config.baseDatabaseName);
@@ -209,6 +260,18 @@ export async function createNewWorktree(
       try {
         removeWorktree(worktreePath!, (command) => log(`Rollback: ${command}`));
         log(`Rollback: removed worktree at ${worktreePath!}.`);
+
+        // An auto-named branch exists only because wt invented it, so leaving it
+        // behind is pure litter — and the next run's collision suffix would have
+        // to step over it. A branch the user named is theirs to keep.
+        if (autoNamed && branchSelection.source === 'local-new') {
+          try {
+            deleteBranch(branchName, (command) => log(`Rollback: ${command}`));
+            log(`Rollback: deleted auto-named branch '${branchName}'.`);
+          } catch (branchErr) {
+            warn(`Rollback failed to delete branch '${branchName}': ${extractErrorMessage(branchErr)}`);
+          }
+        }
       } catch (rollbackErr) {
         warn(`Rollback failed to remove worktree at ${worktreePath!}: ${extractErrorMessage(rollbackErr)}`);
       }
@@ -226,16 +289,16 @@ export async function createNewWorktree(
   }
 
   log(`Ready — slot ${slot}, branch '${actualBranch}'.`);
-  return { slot, allocation, branchSelection, portDrifts };
+  return { slot, allocation, branchSelection, portDrifts, autoNamed };
 }
 
 /** Create a new worktree with full environment isolation */
 export async function newCommand(
-  branchName: string,
+  branchName: string | undefined,
   options: NewOptions,
 ): Promise<void> {
   try {
-    const { slot, allocation, branchSelection, portDrifts } = await createNewWorktree(branchName, {
+    const { slot, allocation, branchSelection, portDrifts, autoNamed } = await createNewWorktree(branchName, {
       ...options,
       quiet: options.json,
     });
@@ -248,6 +311,8 @@ export async function newCommand(
             ...allocation,
             branchSource: branchSelection.source,
             branchSourceLabel: branchSelection.sourceLabel,
+            startPoint: branchSelection.startPoint ?? null,
+            autoNamed,
             portDrifts,
           }),
         ),
@@ -277,6 +342,8 @@ function describeBranchSelection(branchSelection: WorktreeBranchSelection): stri
     case 'local-existing':
       return `Using existing local branch '${branchSelection.branchName}'.`;
     case 'local-new':
-      return `Using branch '${branchSelection.branchName}' as a fresh local branch.`;
+      return branchSelection.startPoint
+        ? `Using branch '${branchSelection.branchName}' as a fresh local branch from ${branchSelection.startPoint}.`
+        : `Using branch '${branchSelection.branchName}' as a fresh local branch.`;
   }
 }

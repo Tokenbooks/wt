@@ -35,7 +35,14 @@ jest.mock('../core/git', () => ({
   createWorktree: jest.fn(),
   getBranchName: jest.fn(),
   removeWorktree: jest.fn(),
+  deleteBranch: jest.fn(),
   resolveWorktreeBranch: jest.fn(),
+  generateAutoBranchName: jest.fn(),
+  assertRefExists: jest.fn(),
+}));
+
+jest.mock('../core/audit', () => ({
+  resolveBaseRef: jest.fn(),
 }));
 
 jest.mock('./setup', () => ({
@@ -63,8 +70,12 @@ import {
   createWorktree,
   getBranchName,
   removeWorktree,
+  deleteBranch,
   resolveWorktreeBranch,
+  generateAutoBranchName,
+  assertRefExists,
 } from '../core/git';
+import { resolveBaseRef } from '../core/audit';
 import { loadConfig } from './setup';
 import { createNewWorktree, newCommand } from './new';
 import type { Allocation, Registry, WtConfig } from '../types';
@@ -93,8 +104,13 @@ const mockGetMainWorktreePath = getMainWorktreePath as jest.MockedFunction<typeo
 const mockCreateWorktree = createWorktree as jest.MockedFunction<typeof createWorktree>;
 const mockGetBranchName = getBranchName as jest.MockedFunction<typeof getBranchName>;
 const mockRemoveWorktree = removeWorktree as jest.MockedFunction<typeof removeWorktree>;
+const mockDeleteBranch = deleteBranch as jest.MockedFunction<typeof deleteBranch>;
 const mockResolveWorktreeBranch =
   resolveWorktreeBranch as jest.MockedFunction<typeof resolveWorktreeBranch>;
+const mockGenerateAutoBranchName =
+  generateAutoBranchName as jest.MockedFunction<typeof generateAutoBranchName>;
+const mockAssertRefExists = assertRefExists as jest.MockedFunction<typeof assertRefExists>;
+const mockResolveBaseRef = resolveBaseRef as jest.MockedFunction<typeof resolveBaseRef>;
 const mockLoadConfig = loadConfig as jest.MockedFunction<typeof loadConfig>;
 
 describe('new command branch selection', () => {
@@ -167,7 +183,10 @@ describe('new command branch selection', () => {
     const result = await createNewWorktree('feat/auth', { install: false });
 
     expect(result.branchSelection).toEqual(originSelection());
-    expect(mockResolveWorktreeBranch).toHaveBeenCalledWith('feat/auth', expect.any(Function));
+    expect(mockResolveWorktreeBranch).toHaveBeenCalledWith('feat/auth', expect.any(Function), {
+      base: undefined,
+      skipOriginLookup: false,
+    });
     expect(mockCreateWorktree).toHaveBeenCalledWith(
       path.join(tmpDir, config.baseWorktreePath),
       originSelection(),
@@ -215,6 +234,8 @@ describe('new command branch selection', () => {
         branchName: string;
         branchSource: string;
         branchSourceLabel: string;
+        startPoint: string | null;
+        autoNamed: boolean;
       };
     };
 
@@ -223,6 +244,77 @@ describe('new command branch selection', () => {
     expect(output.data.branchName).toBe('feat/auth');
     expect(output.data.branchSource).toBe('origin');
     expect(output.data.branchSourceLabel).toBe('origin/feat/auth');
+    expect(output.data.startPoint).toBe('origin/feat/auth');
+    expect(output.data.autoNamed).toBe(false);
+  });
+
+  it('forks a new branch from --base and validates the ref up front', async () => {
+    mockResolveWorktreeBranch.mockReturnValue({
+      branchName: 'feat/auth',
+      source: 'local-new',
+      sourceLabel: 'fresh local branch',
+      startPoint: 'main',
+    });
+
+    await createNewWorktree('feat/auth', { install: false, base: 'main' });
+
+    expect(mockResolveWorktreeBranch).toHaveBeenCalledWith(
+      'feat/auth',
+      expect.any(Function),
+      { base: 'main', skipOriginLookup: false },
+    );
+    expect(mockAssertRefExists).toHaveBeenCalledWith('main');
+    expect(mockGenerateAutoBranchName).not.toHaveBeenCalled();
+  });
+
+  it('ignores --base with a warning when the branch already exists', async () => {
+    mockResolveWorktreeBranch.mockReturnValue({
+      branchName: 'feat/auth',
+      source: 'local-existing',
+      sourceLabel: 'existing local branch',
+    });
+
+    await createNewWorktree('feat/auth', { install: false, base: 'main' });
+
+    expect(mockAssertRefExists).not.toHaveBeenCalled();
+    expect(stderrOutput(stderrSpy)).toContain(
+      "Branch 'feat/auth' already exists; --base main ignored.",
+    );
+  });
+
+  it('auto-names a throwaway branch forked off the default base when no name is given', async () => {
+    mockResolveBaseRef.mockReturnValue('origin/main');
+    mockGenerateAutoBranchName.mockReturnValue('main-20260723-nemanull');
+    mockResolveWorktreeBranch.mockReturnValue({
+      branchName: 'main-20260723-nemanull',
+      source: 'local-new',
+      sourceLabel: 'fresh local branch',
+      startPoint: 'origin/main',
+    });
+
+    const result = await createNewWorktree(undefined, { install: false });
+
+    expect(mockResolveBaseRef).toHaveBeenCalledWith(tmpDir);
+    expect(mockGenerateAutoBranchName).toHaveBeenCalledWith('origin/main');
+    // An invented name must never adopt a same-named branch that exists on origin.
+    expect(mockResolveWorktreeBranch).toHaveBeenCalledWith(
+      'main-20260723-nemanull',
+      expect.any(Function),
+      { base: 'origin/main', skipOriginLookup: true },
+    );
+    expect(mockAssertRefExists).toHaveBeenCalledWith('origin/main');
+    expect(result.autoNamed).toBe(true);
+  });
+
+  it('explains how to recover when no default base resolves', async () => {
+    mockResolveBaseRef.mockImplementation(() => {
+      throw new Error('None of [origin/main, main] resolve in /repo; cannot audit.');
+    });
+
+    await expect(createNewWorktree(undefined, { install: false })).rejects.toThrow(
+      'pass --base <ref> or name a branch',
+    );
+    expect(mockCreateWorktree).not.toHaveBeenCalled();
   });
 
   it('includes branch source details in human summary output', async () => {
@@ -453,6 +545,40 @@ describe('new command rollback on failure', () => {
     expect(mockRemoveDockerServices).toHaveBeenCalledWith(tmpDir, 2, expect.any(Function));
     expect(mockRemoveWorktree).toHaveBeenCalledWith(worktreeDir, expect.any(Function));
     expect(mockWriteRegistry).not.toHaveBeenCalled();
+  });
+
+  it('deletes an auto-named branch during rollback so retries do not pile up', async () => {
+    mockResolveBaseRef.mockReturnValue('origin/main');
+    mockGenerateAutoBranchName.mockReturnValue('main-20260723-nemanull');
+    mockResolveWorktreeBranch.mockReturnValue({
+      branchName: 'main-20260723-nemanull',
+      source: 'local-new',
+      sourceLabel: 'fresh local branch',
+      startPoint: 'origin/main',
+    });
+    mockCopyAndPatchAllEnvFiles.mockImplementation(() => {
+      throw new Error('env patch exploded');
+    });
+
+    await expect(createNewWorktree(undefined, { install: false, quiet: true })).rejects.toThrow(
+      'env patch exploded',
+    );
+
+    expect(mockRemoveWorktree).toHaveBeenCalledWith(worktreeDir, expect.any(Function));
+    expect(mockDeleteBranch).toHaveBeenCalledWith('main-20260723-nemanull', expect.any(Function));
+  });
+
+  it('keeps a user-named branch during rollback', async () => {
+    mockCopyAndPatchAllEnvFiles.mockImplementation(() => {
+      throw new Error('env patch exploded');
+    });
+
+    await expect(
+      createNewWorktree('feat/auth', { install: false, quiet: true }),
+    ).rejects.toThrow('env patch exploded');
+
+    expect(mockRemoveWorktree).toHaveBeenCalledWith(worktreeDir, expect.any(Function));
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
   });
 
   it('does not drop a pre-existing database during rollback', async () => {
