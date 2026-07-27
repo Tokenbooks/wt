@@ -23,8 +23,9 @@ import {
   type WorktreeBranchSelection,
 } from '../core/git';
 import { resolveBaseRef } from '../core/audit';
-import { extractErrorMessage, formatJson, formatSetupSummary, success, error } from '../output';
+import { extractErrorMessage, formatEnvPathEscapes, formatJson, formatSetupSummary, success, error } from '../output';
 import { loadConfig } from './setup';
+import type { EnvPathEscape } from '../core/env-paths';
 import type { Allocation, PortDrift } from '../types';
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -42,6 +43,7 @@ export interface CreateWorktreeResult {
   readonly branchSelection: WorktreeBranchSelection;
   readonly portDrifts: readonly PortDrift[];
   readonly autoNamed: boolean;
+  readonly envPathEscapes: readonly EnvPathEscape[];
 }
 
 /** Read DATABASE_URL from the main worktree's .env file */
@@ -176,6 +178,7 @@ export async function createNewWorktree(
   let worktreePath: string;
   let actualBranch: string;
   let allocation: Allocation;
+  let envPathEscapes: readonly EnvPathEscape[] = [];
 
   try {
     worktreePath = createWorktree(
@@ -213,11 +216,11 @@ export async function createNewWorktree(
     });
 
     log(`Patching ${config.envFiles.length} env file(s)...`);
-    copyAndPatchAllEnvFiles(config, mainRoot, worktreePath, {
+    envPathEscapes = copyAndPatchAllEnvFiles(config, mainRoot, worktreePath, {
       dbName,
       ports,
       branchName: actualBranch,
-    });
+    }).escapes;
 
     allocation = {
       worktreePath,
@@ -289,7 +292,7 @@ export async function createNewWorktree(
   }
 
   log(`Ready — slot ${slot}, branch '${actualBranch}'.`);
-  return { slot, allocation, branchSelection, portDrifts, autoNamed };
+  return { slot, allocation, branchSelection, portDrifts, autoNamed, envPathEscapes };
 }
 
 /** Create a new worktree with full environment isolation */
@@ -298,10 +301,14 @@ export async function newCommand(
   options: NewOptions,
 ): Promise<void> {
   try {
-    const { slot, allocation, branchSelection, portDrifts, autoNamed } = await createNewWorktree(branchName, {
+    const { slot, allocation, branchSelection, portDrifts, autoNamed, envPathEscapes } = await createNewWorktree(branchName, {
       ...options,
       quiet: options.json,
     });
+
+    if (!options.json) {
+      process.stderr.write(formatEnvPathEscapes(envPathEscapes));
+    }
 
     if (options.json) {
       console.log(
@@ -314,6 +321,7 @@ export async function newCommand(
             startPoint: branchSelection.startPoint ?? null,
             autoNamed,
             portDrifts,
+            envPathEscapes,
           }),
         ),
       );

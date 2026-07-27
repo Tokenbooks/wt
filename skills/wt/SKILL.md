@@ -38,6 +38,7 @@ For each `.env` file, examine every variable and classify:
 | Redis connection URL (`redis://...`) | `url` | Yes (`redis`) |
 | Just a port number | `port` | Yes |
 | A URL containing a service port (`http://localhost:3000/...`) | `url` | Yes |
+| A filesystem path | Skip — wt repoints these automatically | — |
 | Anything else (API keys, secrets, flags) | Skip — do not patch | — |
 
 **Step 3: Generate `wt.config.json`**
@@ -84,6 +85,8 @@ Validation rules:
 - `baseDatabaseName` must match the actual DB name in `DATABASE_URL`
 - If using `dockerServices`, Docker must be available locally
 - Do not use legacy `type: "redis"` patches; use `type: "url"` for `REDIS_URL`
+- Do not invent a patch entry for a filesystem path. `wt` repoints absolute paths that
+  address the main checkout at every seed, so no key list can fall behind.
 
 **Step 4: Install wt**
 

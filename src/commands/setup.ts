@@ -17,7 +17,7 @@ import {
   computeServiceHashes,
 } from '../core/docker-services';
 import { getMainWorktreePath, isMainWorktree, getBranchName } from '../core/git';
-import { extractErrorMessage, formatJson, formatRepairPreview, formatSetupSummary, success, error } from '../output';
+import { extractErrorMessage, formatEnvPathEscapes, formatJson, formatRepairPreview, formatSetupSummary, success, error } from '../output';
 import type { Allocation, PortChange, PortDrift, WtConfig } from '../types';
 
 interface SetupOptions {
@@ -295,11 +295,14 @@ export async function setupCommand(
     });
 
     // Copy and patch env files
-    copyAndPatchAllEnvFiles(config, mainRoot, worktreePath, {
+    const envFiles = copyAndPatchAllEnvFiles(config, mainRoot, worktreePath, {
       dbName,
       ports,
       branchName,
     });
+    if (!options.json) {
+      process.stderr.write(formatEnvPathEscapes(envFiles.escapes));
+    }
 
     // Update registry
     const allocation: Allocation = {
@@ -330,6 +333,7 @@ export async function setupCommand(
             portDrifts,
             portChanges,
             recreatedDockerServices: recreateServices,
+            envPathEscapes: envFiles.escapes,
             repaired: !!options.repair,
             dryRun: !!options.dryRun,
           }),
