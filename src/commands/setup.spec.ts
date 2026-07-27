@@ -141,7 +141,7 @@ describe('setup command', () => {
       allocations: { ...registry.allocations, [String(slot)]: allocation },
     }));
     mockWriteRegistry.mockImplementation(() => {});
-    mockCopyAndPatchAllEnvFiles.mockImplementation(() => {});
+    mockCopyAndPatchAllEnvFiles.mockReturnValue({ escapes: [] });
     mockAllocateServicePorts.mockResolvedValue({ ports: { web: 3200 }, drifts: [] });
     process.exitCode = 0;
   });

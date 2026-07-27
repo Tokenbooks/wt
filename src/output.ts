@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import type { EnvPathEscape } from './core/env-paths';
 import type { Allocation, CliResult } from './types';
 
 /** Extract a meaningful message from any error, including AggregateError and child-process errors. */
@@ -105,6 +106,37 @@ export function formatSetupSummary(
     portLines,
     `  Path:     ${alloc.worktreePath}`,
   ].join('\n');
+}
+
+/** Format env paths that escaped the worktree. Empty string when none did. */
+export function formatEnvPathEscapes(escapes: readonly EnvPathEscape[]): string {
+  if (escapes.length === 0) return '';
+
+  const rewritten = escapes.filter((escape) => escape.rewritten !== undefined);
+  const foreign = escapes.filter((escape) => escape.rewritten === undefined);
+  const lines: string[] = [];
+
+  if (rewritten.length > 0) {
+    lines.push(`wt: rewrote ${plural(rewritten.length, 'env value')} that pointed outside this worktree`);
+    for (const escape of rewritten) {
+      lines.push(`  ${escape.file} ${escape.varName}`);
+      lines.push(`    was ${escape.value}`);
+      lines.push(`    now ${escape.rewritten}`);
+    }
+  }
+
+  if (foreign.length > 0) {
+    lines.push(`wt: left ${plural(foreign.length, 'env value')} unchanged, pointing into another checkout`);
+    for (const escape of foreign) {
+      lines.push(`  ${escape.file} ${escape.varName}=${escape.value}`);
+    }
+  }
+
+  return lines.join('\n') + '\n';
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 export interface RepairPreviewInput {

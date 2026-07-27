@@ -26,7 +26,7 @@ Each worktree gets a numbered slot. The slot determines everything:
 - **Database**: Created via `CREATE DATABASE ... TEMPLATE` (fast filesystem copy, not dump/restore)
 - **Docker services**: Run in a dedicated Docker Compose project per worktree, grouped in Docker Desktop
 - **Ports**: Offset by `portStride` (default 100) per slot
-- **Env files**: Copied from main worktree, filled with safe defaults from configured `.env.example` files, and patched with the slot's values
+- **Env files**: Copied from main worktree, filled with safe defaults from configured `.env.example` files, patched with the slot's values, and swept for absolute paths that would reach back into the main checkout
 
 ## Quick Start
 
@@ -174,7 +174,7 @@ Creates a new git worktree and sets up its isolated environment:
    - If `[branch]` is **omitted**, a throwaway branch is auto-named from the base and today's date — like `main-20260723-nemanull` — and forked from `--base` (defaulting to `origin/main`, then `main`). Use this for a clean scratch environment without inventing a name: `wt new --base main`. Because wt invented the name, it is always a fresh branch: no `origin` lookup, and a same-named remote branch is never adopted.
 2. Allocates the next available slot (or uses `--slot N`)
 3. Creates a new Postgres database from the main DB as template
-4. Copies configured `.env` files, fills missing safe defaults from examples, and patches each with slot-specific values
+4. Copies configured `.env` files, fills missing safe defaults from examples, patches each with slot-specific values, and repoints absolute paths that still address the main checkout
 5. Starts configured Docker services after the slot database exists
 6. Runs `postSetup` commands (unless `--no-install`)
 
@@ -427,6 +427,35 @@ This file lives in your repository root and is committed to version control.
 The `port` and `url` types require a `service` field that matches a name in `services`.
 
 Legacy `type: "redis"` patches are no longer supported. Declare Redis in `dockerServices` and patch `REDIS_URL` with `type: "url"` instead.
+
+### Absolute Paths
+
+Patches only touch the keys you list, so anything else in a developer's env file
+is copied into the worktree verbatim — including absolute paths that still point
+at the main checkout. A worktree that runs another checkout's build artifact
+looks completely healthy: the path resolves, the process starts, health checks
+pass, and it listens on the worktree's own isolated port. Only the code behind it
+is wrong.
+
+`wt new` and `wt setup` therefore sweep every env file they seed for absolute
+path values, with no configuration and no key list to keep up to date:
+
+- A path inside the main worktree, or inside one of its other worktrees, is
+  repointed at the same relative location in this worktree, and reported.
+- A path inside an unrelated checkout is reported and left alone.
+- Everything else is left alone. `/usr/bin/node` and `/tmp/cache` are shared on
+  purpose.
+
+```
+wt: rewrote 1 env value that pointed outside this worktree
+  server/.env RUNNER_BIN
+    was /home/dev/proj/apps/runner/target/release/runner
+    now /home/dev/proj/.worktrees/my-branch/apps/runner/target/release/runner
+```
+
+Worktrees created before this existed still hold the escaped values. Re-run plain
+`wt setup` inside one to re-seed and repair it. See
+[docs/env-path-isolation.md](docs/env-path-isolation.md).
 
 ### Env Seeding
 

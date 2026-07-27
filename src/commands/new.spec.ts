@@ -157,6 +157,7 @@ describe('new command branch selection', () => {
     mockFindAvailableSlot.mockReturnValue(2);
     mockAllocateServicePorts.mockResolvedValue({ ports: { web: 3200 }, drifts: [] });
     mockCalculateDbName.mockReturnValue('myapp_wt2');
+    mockCopyAndPatchAllEnvFiles.mockReturnValue({ escapes: [] });
     mockDatabaseExists.mockResolvedValue(false);
     mockCreateDatabase.mockResolvedValue();
     mockCreateWorktree.mockReturnValue(allocation.worktreePath);
@@ -485,6 +486,7 @@ describe('new command rollback on failure', () => {
     mockFindAvailableSlot.mockReturnValue(2);
     mockAllocateServicePorts.mockResolvedValue({ ports: { web: 3200, redis: 6579 }, drifts: [] });
     mockCalculateDbName.mockReturnValue('myapp_wt2');
+    mockCopyAndPatchAllEnvFiles.mockReturnValue({ escapes: [] });
     mockEnsureDockerServices.mockReturnValue({
       projectName: 'wt-2-myapp-deadbeef',
       services: ['redis'],
